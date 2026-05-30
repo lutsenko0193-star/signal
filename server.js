@@ -927,12 +927,21 @@ function render(d) {
       const totalScore = Math.max(1, x.bull + x.bear);
       const bullW = Math.round((x.bull / totalScore) * 100);
       const bearW = 100 - bullW;
-      const mets = [['RSI',x.rsi],['ADX',x.adx],['CCI',x.cci],['STK%K',x.stochK],['BB%B',x.bb+'%'],['WR%',x.wr]];
+      const mets = [
+        ['RSI', x.rsi || '50'],
+        ['ADX', x.adx || '0'],
+        ['CCI', x.cci || '0'],
+        ['STK%K', x.stochK || '50'],
+        ['BB%B', (x.bb || '50') + '%'],
+        ['WR%', x.wr || '0'],
+      ];
       const inds = [
-        ['ICHI',x.ichi],['PSAR',x.psar],
-        ['MTF',x.mtf.replace('BULLISH_','B-').replace('BEARISH_','S-')],
-        ['MACD',x.macdCross !== '-' ? x.macdCross.replace('_CROSS','') : x.signal !== 'WAIT' ? x.signal==='BUY'?'BULL':'BEAR' : 'NEU'],
-        ['VWAP',x.vwapPos],['PAT',x.pattern !== 'NO_PATTERN' ? x.pattern : x.cp],
+        ['ICHI', x.ichi || 'NEU'],
+        ['PSAR', x.psar || 'NEU'],
+        ['MTF', (x.mtf || 'NEUTRAL').replace('BULLISH_','B-').replace('BEARISH_','S-')],
+        ['MACD', x.macdCross && x.macdCross !== '-' ? x.macdCross.replace('_CROSS','') : x.signal !== 'WAIT' ? x.signal==='BUY'?'BULL':'BEAR' : 'NEU'],
+        ['VWAP', x.vwapPos || 'NEU'],
+        ['PAT', x.pattern && x.pattern !== 'NO_PATTERN' ? x.pattern : (x.cp || 'NEU')],
       ];
       h += \`<div class="card \${sc}">
         \${x.newsRisk ? '<div class="news-badge">⚡ NEWS: ' + x.event + '</div>' : ''}
