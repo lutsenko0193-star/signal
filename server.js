@@ -4,7 +4,7 @@ const http = require('http');
 const app = express();
 const server = http.createServer(app);
 const PORT = 3001;
-const HOST = '127.0.0.1';
+const HOST = '0.0.0.0';
 
 const marketData = {};
 let economicNews = [];
