@@ -686,22 +686,53 @@ app.post('/data', (req, res) => {
       });
     }
     const now = Date.now();
+    // ✅ Поддержка исторического timestamp от content.js
+    // Если ts из расширения в секундах — конвертируем в мс
+    let pointTime = now;
+    if (d.ts) {
+      const tsRaw = parseFloat(d.ts);
+      pointTime = tsRaw > 1e12 ? tsRaw : tsRaw * 1000; // секунды → мс
+      // Не принимаем точки старше 2 часов
+      if (now - pointTime > 2 * 3600 * 1000) pointTime = now;
+    }
+    const isHistorical = pointTime < now - 5000; // точка старше 5 сек = историческая
+
     TFS.forEach(tf => {
       const b = marketData[sym][tf];
       const unit = TF_MS[tf];
-      const ts = Math.floor(now / unit) * unit;
+      const ts = Math.floor(pointTime / unit) * unit;
       const len = b.history.length;
       let newBar = false;
-      if (len > 0 && b.history[len - 1].timestamp === ts) {
-        const cur = b.history[len - 1];
-        cur.close = bid;
-        if (bid > cur.high) cur.high = bid;
-        if (bid < cur.low) cur.low = bid;
-        cur.volume += vol;
+
+      if (isHistorical) {
+        // Исторические точки: вставляем в нужное место по timestamp
+        const existing = b.history.find(bar => bar.timestamp === ts);
+        if (existing) {
+          // Обновляем OHLC существующего бара
+          if (bid > existing.high) existing.high = bid;
+          if (bid < existing.low) existing.low = bid;
+          existing.close = bid;
+          existing.volume += vol;
+        } else {
+          // Новый бар — вставляем и сортируем
+          b.history.push({ timestamp: ts, open: bid, high: bid, low: bid, close: bid, volume: vol });
+          b.history.sort((a, b) => a.timestamp - b.timestamp);
+          newBar = true;
+        }
       } else {
-        if (len > 0) newBar = true;
-        b.history.push({ timestamp: ts, open: bid, high: bid, low: bid, close: bid, volume: vol });
+        // Живой тик — стандартная обработка
+        if (len > 0 && b.history[len - 1].timestamp === ts) {
+          const cur = b.history[len - 1];
+          cur.close = bid;
+          if (bid > cur.high) cur.high = bid;
+          if (bid < cur.low) cur.low = bid;
+          cur.volume += vol;
+        } else {
+          if (len > 0) newBar = true;
+          b.history.push({ timestamp: ts, open: bid, high: bid, low: bid, close: bid, volume: vol });
+        }
       }
+
       if (b.history.length > MAX_HISTORY) b.history.shift();
       if (newBar || now - b.lastAt >= 15000 || !b.cached) {
         analyze(sym, tf);
