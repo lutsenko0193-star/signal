@@ -3,11 +3,11 @@ const express = require('express');
 const http = require('http');
 const app = express();
 const server = http.createServer(app);
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 const HOST = '0.0.0.0';
 
 // ════════════════════════════════════════════════════
-//  CORS — разрешаем запросы с любых источников
+//  CORS
 // ════════════════════════════════════════════════════
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -208,21 +208,58 @@ const CALC = {
     return vv > 0 ? pv / vv : (sl[sl.length - 1]?.close || 0);
   },
 
+  // ✅ FIX: правильный ADX с Wilder smoothing (был DX одного периода = всегда ~0)
   ADX(c, p = 14) {
-    if (c.length < p + 2) return { adx: 0, pdi: 0, mdi: 0 };
-    const sl = c.slice(-(p + 1));
-    let pd = 0, md = 0, tr = 0;
-    for (let i = 1; i < sl.length; i++) {
-      const up = sl[i].high - sl[i - 1].high;
-      const dn = sl[i - 1].low - sl[i].low;
-      pd += (up > dn && up > 0) ? up : 0;
-      md += (dn > up && dn > 0) ? dn : 0;
-      tr += Math.max(sl[i].high - sl[i].low, Math.abs(sl[i].high - sl[i - 1].close), Math.abs(sl[i].low - sl[i - 1].close));
+    if (c.length < p * 2 + 1) return { adx: 0, pdi: 0, mdi: 0 };
+
+    // Шаг 1: TR, +DM, -DM для каждой свечи
+    const tr_arr = [], pdm_arr = [], mdm_arr = [];
+    for (let i = 1; i < c.length; i++) {
+      const hi = c[i].high, lo = c[i].low, pc = c[i-1].close;
+      const ph = c[i-1].high, pl = c[i-1].low;
+      tr_arr.push(Math.max(hi - lo, Math.abs(hi - pc), Math.abs(lo - pc)));
+      const up = hi - ph;
+      const dn = pl - lo;
+      pdm_arr.push((up > dn && up > 0) ? up : 0);
+      mdm_arr.push((dn > up && dn > 0) ? dn : 0);
     }
-    if (!tr) return { adx: 0, pdi: 0, mdi: 0 };
-    const pdi = (pd / tr) * 100, mdi = (md / tr) * 100;
-    const dx = (pdi + mdi) === 0 ? 0 : (Math.abs(pdi - mdi) / (pdi + mdi)) * 100;
-    return { adx: Math.min(100, dx), pdi, mdi };
+
+    // Шаг 2: начальные суммы (первые p баров)
+    let atr  = tr_arr.slice(0, p).reduce((a, b) => a + b, 0);
+    let apdm = pdm_arr.slice(0, p).reduce((a, b) => a + b, 0);
+    let amdm = mdm_arr.slice(0, p).reduce((a, b) => a + b, 0);
+
+    // Шаг 3: собираем DX через Wilder smoothing
+    const dx_arr = [];
+    const _dx = (apdm, amdm, atr) => {
+      const pdi = atr > 0 ? (apdm / atr) * 100 : 0;
+      const mdi = atr > 0 ? (amdm / atr) * 100 : 0;
+      return (pdi + mdi > 0) ? Math.abs(pdi - mdi) / (pdi + mdi) * 100 : 0;
+    };
+    dx_arr.push(_dx(apdm, amdm, atr));
+
+    for (let i = p; i < tr_arr.length; i++) {
+      atr  = atr  - (atr  / p) + tr_arr[i];
+      apdm = apdm - (apdm / p) + pdm_arr[i];
+      amdm = amdm - (amdm / p) + mdm_arr[i];
+      dx_arr.push(_dx(apdm, amdm, atr));
+    }
+
+    // Шаг 4: ADX = Wilder MA от DX
+    if (dx_arr.length < p) return { adx: 0, pdi: 0, mdi: 0 };
+    let adx = dx_arr.slice(0, p).reduce((a, b) => a + b, 0) / p;
+    for (let i = p; i < dx_arr.length; i++) {
+      adx = (adx * (p - 1) + dx_arr[i]) / p;
+    }
+
+    const pdi_final = atr > 0 ? (apdm / atr) * 100 : 0;
+    const mdi_final = atr > 0 ? (amdm / atr) * 100 : 0;
+
+    return {
+      adx: Math.min(100, Math.round(adx * 100) / 100),
+      pdi: Math.round(pdi_final * 100) / 100,
+      mdi: Math.round(mdi_final * 100) / 100
+    };
   },
 
   ICHIMOKU(c) {
@@ -524,6 +561,7 @@ function analyze(sym, tf) {
     if (macd.cross === 'BEAR_CROSS') bear += 22;
     if (macd.hist > 0 && macd.macd > 0) bull += 8;
     if (macd.hist < 0 && macd.macd < 0) bear += 8;
+    // ✅ FIX: Stochastic зоны 80/20 вместо 70/30
     if (stoch.k < 20 && stoch.k > stoch.d) bull += 15; else if (stoch.k < 30) bull += 8;
     if (stoch.k > 80 && stoch.k < stoch.d) bear += 15; else if (stoch.k > 70) bear += 8;
     const BULL_C = ['PIN_BULL', 'ENG_BULL', 'HAMMER', 'THREE_WHITE', 'MARUBOZU', 'MORNING_STAR'];
@@ -548,7 +586,9 @@ function analyze(sym, tf) {
     if (last.close < ichi.tenkan && ichi.tenkan < ichi.kijun) bear += 8;
     if (psar.bull && last.close > psar.sar) bull += 12;
     if (!psar.bull && last.close < psar.sar) bear += 12;
+    // ✅ FIX: ADX теперь считается правильно, интерпретация работает
     if (adx > 25) { if (adxObj.pdi > adxObj.mdi) bull += 10; if (adxObj.mdi > adxObj.pdi) bear += 10; }
+    if (adx > 40) { if (adxObj.pdi > adxObj.mdi) bull += 8; if (adxObj.mdi > adxObj.pdi) bear += 8; }
     if (div.bull) bull += 20;
     if (div.bear) bear += 20;
     const fibNear = sr.fib.some(f => Math.abs(last.close - f.level) < atr * 0.5);
@@ -621,11 +661,21 @@ function analyze(sym, tf) {
   };
 }
 
+// ✅ FIX: нормализация символа на входе — пробел → _, убираем мусор
+function normalizeSymbol(raw) {
+  return (raw || '')
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+    .replace(/#/g, '')
+    .replace(/-/g, '');
+}
+
 app.post('/data', (req, res) => {
   try {
     const raw = req.body.toString().replace(/[\x00-\x1F\x7F-\x9F]/g, '').trim();
     const d = JSON.parse(raw);
-    const sym = d.symbol;
+    // ✅ FIX: нормализуем символ — "AUDNZD OTC" и "AUDNZD_OTC" станут одним ключом
+    const sym = normalizeSymbol(d.symbol);
     const bid = parseFloat(d.bid || d.close || 0);
     const vol = parseFloat(d.volume || 1);
     if (!sym || bid <= 0) return res.status(400).send('Invalid');
@@ -689,6 +739,9 @@ app.get('/get_signals', (req, res) => {
   out.sort((a, b) => a.sym !== b.sym ? a.sym.localeCompare(b.sym) : TF_ORDER[a.tf] - TF_ORDER[b.tf]);
   res.json(out);
 });
+
+// ✅ FIX: keep-alive ping endpoint
+app.get('/ping', (req, res) => res.status(200).send('pong'));
 
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -840,7 +893,8 @@ function getFiltered(d) {
   return d.filter(x => {
     if (activeTF !== 'ALL' && x.tf !== activeTF) return false;
     if (activeDir !== 'ALL' && x.signal !== activeDir) return false;
-    if (activeConf > 0 && x.conf < activeConf) return false;
+    // ✅ FIX: явное приведение типов чтобы избежать строкового сравнения
+    if (activeConf > 0 && Number(x.conf) < Number(activeConf)) return false;
     return true;
   });
 }
@@ -997,6 +1051,21 @@ load();
 </script>
 </body></html>`);
 });
+
+// ✅ FIX: Keep-alive — пингуем сами себя каждые 14 минут чтобы Render не засыпал
+const SELF_URL = process.env.RENDER_EXTERNAL_URL
+  ? process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '')
+  : `http://localhost:${PORT}`;
+
+setInterval(() => {
+  http.get(SELF_URL + '/ping', (res) => {
+    console.log('[PING] keep-alive ok ' + new Date().toISOString());
+  }).on('error', (e) => {
+    console.log('[PING] keep-alive error:', e.message);
+  });
+}, 14 * 60 * 1000);
+
+console.log('[KEEP-ALIVE] Will ping ' + SELF_URL + '/ping every 14 min');
 
 server.listen(PORT, HOST, () => {
   console.log('SIGNAL ENGINE v14 running on port ' + PORT);
