@@ -2,7 +2,7 @@
 const express = require('express');
 const http = require('http');
 const app = express();
-const server = https://https://signal-o6x2.onrender.com/;
+const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
 const HOST = '0.0.0.0';
 
