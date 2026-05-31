@@ -1,6 +1,7 @@
 'use strict';
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
@@ -1089,7 +1090,9 @@ const SELF_URL = process.env.RENDER_EXTERNAL_URL
   : `http://localhost:${PORT}`;
 
 setInterval(() => {
-  http.get(SELF_URL + '/ping', (res) => {
+  // Используем https для Render (https URL), http для localhost
+  const client = SELF_URL.startsWith('https') ? https : http;
+  client.get(SELF_URL + '/ping', (res) => {
     console.log('[PING] keep-alive ok ' + new Date().toISOString());
   }).on('error', (e) => {
     console.log('[PING] keep-alive error:', e.message);
