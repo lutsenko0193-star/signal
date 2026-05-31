@@ -263,18 +263,157 @@ const CALC = {
     };
   },
 
+  // ✅ FIX: Ichimoku параметры 7/30/52 (было 9/26/52)
   ICHIMOKU(c) {
-    if (c.length < 52) return { above: null, tenkan: 0, kijun: 0, spanA: 0, spanB: 0 };
+    if (c.length < 52) return { above: null, below: null, tenkan: 0, kijun: 0, spanA: 0, spanB: 0, tkCross: null };
     const high = (arr) => Math.max(...arr.map(x => x.high));
     const low = (arr) => Math.min(...arr.map(x => x.low));
-    const tenkan = (high(c.slice(-9)) + low(c.slice(-9))) / 2;
-    const kijun = (high(c.slice(-26)) + low(c.slice(-26))) / 2;
-    const spanA = (tenkan + kijun) / 2;
-    const spanB = (high(c.slice(-52)) + low(c.slice(-52))) / 2;
+    const tenkan = (high(c.slice(-7)) + low(c.slice(-7))) / 2;
+    const kijun  = (high(c.slice(-30)) + low(c.slice(-30))) / 2;
+    const spanA  = (tenkan + kijun) / 2;
+    const spanB  = (high(c.slice(-52)) + low(c.slice(-52))) / 2;
+    // Предыдущие значения для определения кросса TK
+    const tenkanP = c.length > 8  ? (high(c.slice(-8,-1))  + low(c.slice(-8,-1)))  / 2 : tenkan;
+    const kijunP  = c.length > 31 ? (high(c.slice(-31,-1)) + low(c.slice(-31,-1))) / 2 : kijun;
+    let tkCross = null;
+    if (tenkanP < kijunP && tenkan > kijun) tkCross = 'BULL';
+    if (tenkanP > kijunP && tenkan < kijun) tkCross = 'BEAR';
     const last = c[c.length - 1].close;
     const above = last > Math.max(spanA, spanB);
     const below = last < Math.min(spanA, spanB);
-    return { above, below, tenkan, kijun, spanA, spanB };
+    return { above, below, tenkan, kijun, spanA, spanB, tkCross };
+  },
+
+  // ✅ NEW: SMA 20/50/200
+  SMA_LEVELS(c) {
+    const sma20  = c.length >= 20  ? c.slice(-20).reduce((a,b)  => a + b.close, 0) / 20  : null;
+    const sma50  = c.length >= 50  ? c.slice(-50).reduce((a,b)  => a + b.close, 0) / 50  : null;
+    const sma200 = c.length >= 200 ? c.slice(-200).reduce((a,b) => a + b.close, 0) / 200 : null;
+    const last = c[c.length - 1].close;
+    const aboveSma20  = sma20  ? last > sma20  : null;
+    const aboveSma50  = sma50  ? last > sma50  : null;
+    const aboveSma200 = sma200 ? last > sma200 : null;
+    // Золотой/мёртвый крест SMA50/200
+    let smaCross = null;
+    if (sma50 && sma200 && c.length >= 201) {
+      const prevSma50  = c.slice(-51,-1).reduce((a,b)  => a + b.close, 0) / 50;
+      const prevSma200 = c.slice(-201,-1).reduce((a,b) => a + b.close, 0) / 200;
+      if (prevSma50 < prevSma200 && sma50 > sma200) smaCross = 'GOLDEN';
+      if (prevSma50 > prevSma200 && sma50 < sma200) smaCross = 'DEATH';
+    }
+    return { sma20, sma50, sma200, aboveSma20, aboveSma50, aboveSma200, smaCross };
+  },
+
+  // ✅ NEW: Supply/Demand зоны (Wyckoff-based)
+  SUPPLY_DEMAND(c, atr) {
+    if (c.length < 30) return { supplyZone: null, demandZone: null, inSupply: false, inDemand: false };
+    const last = c[c.length - 1].close;
+    const win = c.slice(-100);
+    // Ищем базы (консолидации перед сильным движением)
+    let demandZone = null, supplyZone = null;
+    for (let i = 5; i < win.length - 5; i++) {
+      const before = win.slice(i-5, i);
+      const after  = win.slice(i, i+5);
+      const beforeRange = Math.max(...before.map(x=>x.high)) - Math.min(...before.map(x=>x.low));
+      const afterMove   = Math.abs(after[after.length-1].close - after[0].open);
+      // База + сильный импульс вверх = зона спроса
+      if (beforeRange < atr * 2 && afterMove > atr * 3 && after[after.length-1].close > after[0].open) {
+        demandZone = { high: Math.max(...before.map(x=>x.high)), low: Math.min(...before.map(x=>x.low)) };
+      }
+      // База + сильный импульс вниз = зона предложения
+      if (beforeRange < atr * 2 && afterMove > atr * 3 && after[after.length-1].close < after[0].open) {
+        supplyZone = { high: Math.max(...before.map(x=>x.high)), low: Math.min(...before.map(x=>x.low)) };
+      }
+    }
+    const inDemand = demandZone ? last >= demandZone.low && last <= demandZone.high * 1.002 : false;
+    const inSupply = supplyZone ? last <= supplyZone.high && last >= supplyZone.low * 0.998 : false;
+    return { supplyZone, demandZone, inSupply, inDemand };
+  },
+
+  // ✅ NEW: VSA — Volume Spread Analysis
+  VSA(c) {
+    if (c.length < 20) return { signal: 'NEUTRAL', effort: false, noSupply: false, noDemand: false };
+    const last = c[c.length - 1];
+    const prev = c[c.length - 2];
+    const volAvg = c.slice(-20).reduce((a,b) => a + b.volume, 0) / 20;
+    const spread = last.high - last.low;
+    const spreadAvg = c.slice(-20).reduce((a,b) => a + (b.high-b.low), 0) / 20;
+    const isHighVol  = last.volume > volAvg * 1.5;
+    const isLowVol   = last.volume < volAvg * 0.7;
+    const isWideSpread = spread > spreadAvg * 1.3;
+    const isNarrowSpread = spread < spreadAvg * 0.7;
+    const isUp   = last.close > last.open;
+    const isDown = last.close < last.open;
+    // Усилие без результата (effort vs result)
+    const effort = isHighVol && isNarrowSpread;
+    // Нет предложения — узкий спред, низкий объём при росте
+    const noSupply = isLowVol && isNarrowSpread && isUp;
+    // Нет спроса — узкий спред, низкий объём при падении
+    const noDemand = isLowVol && isNarrowSpread && isDown;
+    // Остановка продаж — высокий объём, широкий спред вниз, закрытие в верхней части
+    const stoppingVolume = isHighVol && isWideSpread && isDown && 
+      (last.close - last.low) > (last.high - last.low) * 0.6;
+    // Профессиональный покупатель
+    const climaxBull = isHighVol && isWideSpread && isUp;
+    const climaxBear = isHighVol && isWideSpread && isDown;
+    let signal = 'NEUTRAL';
+    if (stoppingVolume || noSupply) signal = 'BULL';
+    if (noDemand) signal = 'BEAR';
+    if (climaxBull && prev.close < prev.open) signal = 'BULL'; // разворот
+    if (climaxBear && prev.close > prev.open) signal = 'BEAR';
+    return { signal, effort, noSupply, noDemand, stoppingVolume };
+  },
+
+  // ✅ NEW: Метод Вайкоффа — Spring, Upthrust, накопление/распределение
+  WYCKOFF(c, sr) {
+    if (c.length < 30 || !sr) return { phase: 'UNKNOWN', spring: false, upthrust: false };
+    const last = c[c.length - 1];
+    const atr  = this.ATR(c.slice(-20), 14);
+    // Spring: цена пробила поддержку но быстро вернулась (ложный пробой вниз)
+    const spring = last.low < sr.sup - atr * 0.3 && last.close > sr.sup && 
+                   (last.close - last.low) > (last.high - last.low) * 0.6;
+    // Upthrust: цена пробила сопротивление но быстро вернулась (ложный пробой вверх)
+    const upthrust = last.high > sr.res + atr * 0.3 && last.close < sr.res &&
+                     (last.high - last.close) > (last.high - last.low) * 0.6;
+    // Определяем фазу Вайкоффа
+    const win = c.slice(-50);
+    const range = Math.max(...win.map(x=>x.high)) - Math.min(...win.map(x=>x.low));
+    const recentRange = Math.max(...c.slice(-10).map(x=>x.high)) - Math.min(...c.slice(-10).map(x=>x.low));
+    const volAvg = c.slice(-50).reduce((a,b) => a+b.volume, 0) / 50;
+    const recentVol = c.slice(-10).reduce((a,b) => a+b.volume, 0) / 10;
+    let phase = 'UNKNOWN';
+    if (recentRange < range * 0.3 && recentVol < volAvg * 0.8) phase = 'ACCUMULATION';
+    if (recentRange < range * 0.3 && recentVol > volAvg * 1.2) phase = 'DISTRIBUTION';
+    if (recentRange > range * 0.5 && last.close > c[c.length-10].close) phase = 'MARKUP';
+    if (recentRange > range * 0.5 && last.close < c[c.length-10].close) phase = 'MARKDOWN';
+    return { phase, spring, upthrust };
+  },
+
+  // ✅ NEW: Зоны ликвидности (где стоят стопы толпы)
+  LIQUIDITY(c, atr) {
+    if (c.length < 30) return { bullLiq: null, bearLiq: null, swept: false };
+    const win = c.slice(-50);
+    // Ищем swing highs/lows — там стоят стопы
+    const swingHighs = [], swingLows = [];
+    for (let i = 3; i < win.length - 3; i++) {
+      let isH = true, isL = true;
+      for (let j = i-3; j <= i+3; j++) {
+        if (j === i) continue;
+        if (win[j].high >= win[i].high) isH = false;
+        if (win[j].low  <= win[i].low)  isL = false;
+      }
+      if (isH) swingHighs.push(win[i].high);
+      if (isL)  swingLows.push(win[i].low);
+    }
+    const last = c[c.length - 1].close;
+    // Ближайшая ликвидность выше (стопы продавцов)
+    const bullLiq = swingHighs.filter(h => h > last).sort((a,b) => a-b)[0] || null;
+    // Ближайшая ликвидность ниже (стопы покупателей)
+    const bearLiq = swingLows.filter(l => l < last).sort((a,b) => b-a)[0] || null;
+    // Свип ликвидности — цена прошла через уровень и вернулась
+    const swept = (bullLiq && c[c.length-1].high > bullLiq && last < bullLiq) ||
+                  (bearLiq && c[c.length-1].low < bearLiq && last > bearLiq);
+    return { bullLiq, bearLiq, swept };
   },
 
   PSAR(c, step = 0.02, max = 0.2) {
@@ -548,6 +687,12 @@ function analyze(sym, tf) {
   const mtf    = mtfStruct(sym, tf);
   const pat    = detectPattern(closed, sr);
   const ts     = trendStrength(ema5, ema8, ema13, ema21, ema50, last.close);
+  // ✅ NEW: дополнительные индикаторы
+  const smaLvl = CALC.SMA_LEVELS(closed);
+  const sdZone = CALC.SUPPLY_DEMAND(closed, atr);
+  const vsa    = CALC.VSA(closed);
+  const wyck   = CALC.WYCKOFF(closed, sr);
+  const liq    = CALC.LIQUIDITY(closed, atr);
   let bull = 0, bear = 0;
   if (n >= 15) {
     if (ms.struct === 'UPTREND') bull += 30;
