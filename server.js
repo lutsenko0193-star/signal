@@ -1030,6 +1030,10 @@ body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;
   <button class="filter-btn active" data-dir="ALL">ALL</button>
   <button class="filter-btn" data-dir="BUY">BUY</button>
   <button class="filter-btn" data-dir="SELL">SELL</button>
+  <span class="filter-label" style="margin-left:10px">TYPE:</span>
+  <button class="filter-btn active" data-type="ALL">ALL</button>
+  <button class="filter-btn" data-type="OTC">OTC</button>
+  <button class="filter-btn" data-type="FX">FOREX</button>
   <span class="filter-label" style="margin-left:10px">CONF:</span>
   <button class="filter-btn active" data-conf="0">ANY</button>
   <button class="filter-btn" data-conf="65">65%+</button>
@@ -1047,6 +1051,7 @@ let allData = [];
 let activeTF = 'ALL';
 let activeDir = 'ALL';
 let activeConf = 0;
+let activeType = 'ALL';
 let lastRefresh = 0;
 document.querySelectorAll('[data-tf]').forEach(b => {
   b.addEventListener('click', () => {
@@ -1066,12 +1071,19 @@ document.querySelectorAll('[data-conf]').forEach(b => {
     b.classList.add('active'); activeConf = parseInt(b.dataset.conf); render(allData);
   });
 });
+document.querySelectorAll('[data-type]').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('[data-type]').forEach(x => x.classList.remove('active'));
+    b.classList.add('active'); activeType = b.dataset.type; render(allData);
+  });
+});
 function getFiltered(d) {
   return d.filter(x => {
     if (activeTF !== 'ALL' && x.tf !== activeTF) return false;
     if (activeDir !== 'ALL' && x.signal !== activeDir) return false;
-    // ✅ FIX: явное приведение типов чтобы избежать строкового сравнения
     if (activeConf > 0 && Number(x.conf) < Number(activeConf)) return false;
+    if (activeType === 'OTC' && !x.sym.includes('OTC')) return false;
+    if (activeType === 'FX'  &&  x.sym.includes('OTC')) return false;
     return true;
   });
 }
@@ -1108,44 +1120,59 @@ function render(d) {
   document.getElementById('sig-count').innerHTML = '<b>' + activeSignals.length + '</b> signals';
   const buyC = d.filter(x => x.signal === 'BUY').length;
   const sellC = d.filter(x => x.signal === 'SELL').length;
+  const otcC = new Set(d.filter(x => x.sym.includes('OTC')).map(x => x.sym)).size;
+  const fxC  = new Set(d.filter(x => !x.sym.includes('OTC')).map(x => x.sym)).size;
   const avgConf = activeSignals.length ? Math.round(activeSignals.reduce((a,b) => a + b.conf, 0) / activeSignals.length) : 0;
   document.getElementById('stats-bar').innerHTML =
-    '<span>TOTAL PAIRS: <b>' + new Set(d.map(x => x.sym)).size + '</b></span>' +
+    '<span>OTC: <b style="color:var(--cyan)">' + otcC + '</b></span>' +
+    '<span>FOREX: <b style="color:var(--purple)">' + fxC + '</b></span>' +
     '<span>BUY: <b style="color:var(--green)">' + buyC + '</b></span>' +
     '<span>SELL: <b style="color:var(--red)">' + sellC + '</b></span>' +
     '<span>AVG CONF: <b>' + avgConf + '%</b></span>' +
     '<span>LAST UPDATE: <b>' + now.toLocaleTimeString() + '</b></span>';
   const filtered = getFiltered(d);
-  const syms = [...new Set(d.map(x => x.sym))];
+  const allSyms = [...new Set(d.map(x => x.sym))];
+  const otcSyms  = allSyms.filter(s => s.includes('OTC')).sort();
+  const fxSyms   = allSyms.filter(s => !s.includes('OTC')).sort();
   let h = '';
-  const tops = [...d].filter(x => x.signal !== 'WAIT').sort((a, b) => b.conf - a.conf).slice(0, 4);
+  const tops = [...d].filter(x => x.signal !== 'WAIT').sort((a, b) => b.conf - a.conf).slice(0, 6);
   if (tops.length) {
     h += '<div class="section-title">TOP SIGNALS</div><div class="top-signals">';
     tops.forEach(x => {
       const cls = x.signal === 'BUY' ? 'buy' : 'sell';
+      const tag = x.sym.includes('OTC') ? 'OTC' : 'FX';
       h += \`<div class="top-card \${cls}" onclick="copyPair('\${x.sym}')">
-        <div><div class="tc-pair">\${x.sym}</div><div class="tc-tf">\${x.tf} · \${x.exp}</div></div>
+        <div><div class="tc-pair">\${x.sym} <span style="font-size:8px;opacity:.6">\${tag}</span></div><div class="tc-tf">\${x.tf} · \${x.exp}</div></div>
         <div class="tc-conf \${cls}">\${x.conf}%</div></div>\`;
     });
     h += '</div>';
   }
-  if (syms.length) {
-    h += '<div class="section-title">HEATMAP</div><div class="hmap-wrap"><div class="hmap-t">';
-    h += '<div class="hmap-hdr"><div></div>' + TFS.map(t => '<div>' + t + '</div>').join('') + '</div>';
+
+  // ✅ Функция рендера одной тепловой карты
+  const renderHmap = (syms, title, color) => {
+    if (!syms.length) return '';
+    let out = \`<div class="section-title" style="color:\${color}">\${title} (\${syms.length} pairs)</div>\`;
+    out += '<div class="hmap-wrap"><div class="hmap-t">';
+    out += '<div class="hmap-hdr"><div></div>' + TFS.map(t => '<div>' + t + '</div>').join('') + '</div>';
     syms.forEach(s => {
-      h += '<div class="hmap-row"><div class="hmap-sym">' + s + '</div>';
+      out += '<div class="hmap-row"><div class="hmap-sym">' + s.replace('_OTC','').replace('_otc','') + '</div>';
       TFS.forEach(t => {
         const x = d.find(z => z.sym === s && z.tf === t);
-        if (!x) { h += '<div class="hmap-cell hc-w">—</div>'; return; }
+        if (!x) { out += '<div class="hmap-cell hc-w">—</div>'; return; }
         const cls = x.signal === 'BUY' ? 'hc-b' : x.signal === 'SELL' ? 'hc-s' : 'hc-w';
         const lbl = x.signal === 'WAIT' ? '·' : x.signal;
-        h += \`<div class="hmap-cell \${cls}" onclick="copyPair('\${x.sym}')" title="\${x.sym} \${t} \${x.signal} \${x.conf}%">
+        out += \`<div class="hmap-cell \${cls}" onclick="copyPair('\${x.sym}')" title="\${x.sym} \${t} \${x.signal} \${x.conf}%">
           \${lbl}<span class="conf-pct">\${x.signal !== 'WAIT' ? x.conf + '%' : ''}</span></div>\`;
       });
-      h += '</div>';
+      out += '</div>';
     });
-    h += '</div></div>';
-  }
+    out += '</div></div>';
+    return out;
+  };
+
+  if (activeType === 'ALL' || activeType === 'OTC') h += renderHmap(otcSyms, '⬡ OTC PAIRS', 'var(--cyan)');
+  if (activeType === 'ALL' || activeType === 'FX')  h += renderHmap(fxSyms,  '◈ FOREX PAIRS', 'var(--purple)');
+
   h += '<div>';
   TFS.forEach(tf => {
     const f = filtered.filter(x => x.tf === tf);
