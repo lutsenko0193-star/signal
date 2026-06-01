@@ -1135,7 +1135,12 @@ function render(d) {
   const otcSyms  = allSyms.filter(s => s.includes('OTC')).sort();
   const fxSyms   = allSyms.filter(s => !s.includes('OTC')).sort();
   let h = '';
-  const tops = [...d].filter(x => x.signal !== 'WAIT').sort((a, b) => b.conf - a.conf).slice(0, 6);
+  const tops = [...d].filter(x => {
+    if (x.signal === 'WAIT') return false;
+    if (activeType === 'OTC' && !x.sym.includes('OTC')) return false;
+    if (activeType === 'FX'  &&  x.sym.includes('OTC')) return false;
+    return true;
+  }).sort((a, b) => b.conf - a.conf).slice(0, 6);
   if (tops.length) {
     h += '<div class="section-title">TOP SIGNALS</div><div class="top-signals">';
     tops.forEach(x => {
