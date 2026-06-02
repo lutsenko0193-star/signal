@@ -11,8 +11,7 @@ const HOST = '0.0.0.0';
 //  НОВЫЙ ДВИЖОК АНАЛИЗА v15
 // ════════════════════════════════════════════════════
 const ENGINE = require('./engine');
-const { IND, scoreSignal, calcSR, marketStructure, momentumScore, manipulationDetector, priceActionZones, mtfConfluence } = ENGINE;
-
+const { IND, scoreSignal, marketStructure, momentumScore, manipulationDetector, priceActionZones, mtfConfluence } = ENGINE;
 // ════════════════════════════════════════════════════
 //  CORS
 // ════════════════════════════════════════════════════
