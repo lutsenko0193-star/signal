@@ -8,6 +8,12 @@ const PORT = process.env.PORT || 3001;
 const HOST = '0.0.0.0';
 
 // ════════════════════════════════════════════════════
+//  НОВЫЙ ДВИЖОК АНАЛИЗА v15
+// ════════════════════════════════════════════════════
+const ENGINE = require('./engine');
+const { IND, scoreSignal, calcSR, marketStructure, momentumScore, manipulationDetector, priceActionZones, mtfConfluence } = ENGINE;
+
+// ════════════════════════════════════════════════════
 //  CORS
 // ════════════════════════════════════════════════════
 app.use((req, res, next) => {
@@ -651,138 +657,56 @@ function analyze(sym, tf) {
   if (!hist || !hist.length) return;
   const closed = hist.slice(0, -1);
   const n = closed.length;
+
   if (n < 3) {
     data.signal = 'WAIT';
-    data.cached = { rsi: '-', conf: 0, struct: `ACCUM(${n}/30)`, pattern: 'WAIT', delta: '0', sup: '0', res: '0', newsRisk: false, event: '', cp: 'NEUTRAL', wr: '0', mom: '0', bb: '50', adx: '0', stochK: '50', cci: '0', bull: 0, bear: 0, mtf: 'NEUTRAL' };
+    data.cached = {
+      rsi: '-', conf: 0, struct: `ACCUM(${n}/15)`, pattern: 'WAIT',
+      delta: '0', sup: '0', res: '0', newsRisk: false, event: '',
+      cp: 'NEUTRAL', wr: '0', mom: '0', bb: '50', adx: '0',
+      stochK: '50', cci: '0', bull: 50, bear: 50, mtf: 'NEUTRAL',
+      macdCross: '-', vwapPos: 'NEUTRAL', psar: 'BULL',
+      ichi: 'IN', edge: 0, stable: 0
+    };
     return;
   }
+
   const last = closed[n - 1];
   if (data.lastTS === last.timestamp && data.cached) return;
   data.lastTS = last.timestamp;
-  const rsi   = CALC.RSI(closed);
-  const ema5   = CALC.EMA(closed, 5);
-  const ema8   = CALC.EMA(closed, 8);
-  const ema13  = CALC.EMA(closed, 13);
-  const ema21  = CALC.EMA(closed, 21);
-  const ema50  = CALC.EMA(closed, 50);
-  const atr    = CALC.ATR(closed, 14);
-  const macd   = CALC.MACD(closed);
-  const stoch  = CALC.STOCH(closed, 14);
-  const adxObj = CALC.ADX(closed, 14);
-  const adx    = adxObj.adx;
-  const obv    = CALC.OBV_SLOPE(closed, 14);
-  const vwap   = CALC.VWAP(closed);
-  const bb     = CALC.BB(closed, 20, 2);
-  const div    = CALC.RSI_DIV(closed);
-  const cp     = CALC.CANDLE(closed);
-  const wr     = CALC.WILLIAMS_R(closed, 14);
-  const mom    = CALC.MOMENTUM(closed, 10);
-  const cci    = CALC.CCI(closed, 14);
-  const ichi   = CALC.ICHIMOKU(closed);
-  const psar   = CALC.PSAR(closed);
-  const roc    = CALC.ROC(closed, 10);
-  const sr     = calcSR(closed);
-  const ms     = marketStruct(closed, sr, atr);
-  const news   = newsStatus(sym);
-  const mtf    = mtfStruct(sym, tf);
-  const pat    = detectPattern(closed, sr);
-  const ts     = trendStrength(ema5, ema8, ema13, ema21, ema50, last.close);
-  // ✅ NEW: дополнительные индикаторы
-  const smaLvl = CALC.SMA_LEVELS(closed);
-  const sdZone = CALC.SUPPLY_DEMAND(closed, atr);
-  const vsa    = CALC.VSA(closed);
-  const wyck   = CALC.WYCKOFF(closed, sr);
-  const liq    = CALC.LIQUIDITY(closed, atr);
-  let bull = 0, bear = 0;
-  if (n >= 15) {
-    if (ms.struct === 'UPTREND') bull += 30;
-    if (ms.struct === 'DOWNTREND') bear += 30;
-    if (ts >= 5) bull += 25; else if (ts >= 4) bull += 18; else if (ts >= 3) bull += 10;
-    const tsB = 5 - ts;
-    if (tsB >= 5) bear += 25; else if (tsB >= 4) bear += 18; else if (tsB >= 3) bear += 10;
-    if (last.close > vwap * 1.0005) bull += 12; else if (last.close < vwap * 0.9995) bear += 12;
-    if (rsi < 25) bull += 20; else if (rsi < 35) bull += 12; else if (rsi < 45) bull += 5;
-    if (rsi > 75) bear += 20; else if (rsi > 65) bear += 12; else if (rsi > 55) bear += 5;
-    if (macd.cross === 'BULL_CROSS') bull += 22;
-    if (macd.cross === 'BEAR_CROSS') bear += 22;
-    if (macd.hist > 0 && macd.macd > 0) bull += 8;
-    if (macd.hist < 0 && macd.macd < 0) bear += 8;
-    // ✅ FIX: Stochastic зоны 80/20 вместо 70/30
-    if (stoch.k < 20 && stoch.k > stoch.d) bull += 15; else if (stoch.k < 30) bull += 8;
-    if (stoch.k > 80 && stoch.k < stoch.d) bear += 15; else if (stoch.k > 70) bear += 8;
-    const BULL_C = ['PIN_BULL', 'ENG_BULL', 'HAMMER', 'THREE_WHITE', 'MARUBOZU', 'MORNING_STAR'];
-    const BEAR_C = ['PIN_BEAR', 'ENG_BEAR', 'HANGING_MAN', 'THREE_BLACK', 'EVENING_STAR'];
-    if (BULL_C.includes(cp)) bull += 22;
-    if (BEAR_C.includes(cp)) bear += 22;
-    if (last.close <= sr.sup + atr * 0.4 && sr.supS >= 2) bull += 30;
-    if (last.close >= sr.res - atr * 0.4 && sr.resS >= 2) bear += 30;
-    if (obv > 8 && last.close - closed[n - 2].close > 0) bull += 15;
-    if (obv < -8 && closed[n - 2].close - last.close > 0) bear += 15;
-    if (bb.pctB < 8) bull += 12; else if (bb.pctB < 18) bull += 6;
-    if (bb.pctB > 92) bear += 12; else if (bb.pctB > 82) bear += 6;
-    if (bb.squeeze && ms.struct === 'UPTREND') bull += 8;
-    if (bb.squeeze && ms.struct === 'DOWNTREND') bear += 8;
-    if (cci < -100) bull += 10; else if (cci < -50) bull += 5;
-    if (cci > 100) bear += 10; else if (cci > 50) bear += 5;
-    if (wr < -80) bull += 8; else if (wr < -65) bull += 4;
-    if (wr > -20) bear += 8; else if (wr > -35) bear += 4;
-    if (ichi.above === true) bull += 18;
-    if (ichi.below === true) bear += 18;
-    if (last.close > ichi.tenkan && ichi.tenkan > ichi.kijun) bull += 8;
-    if (last.close < ichi.tenkan && ichi.tenkan < ichi.kijun) bear += 8;
-    if (psar.bull && last.close > psar.sar) bull += 12;
-    if (!psar.bull && last.close < psar.sar) bear += 12;
-    // ✅ FIX: ADX теперь считается правильно, интерпретация работает
-    if (adx > 25) { if (adxObj.pdi > adxObj.mdi) bull += 10; if (adxObj.mdi > adxObj.pdi) bear += 10; }
-    if (adx > 40) { if (adxObj.pdi > adxObj.mdi) bull += 8; if (adxObj.mdi > adxObj.pdi) bear += 8; }
-    if (div.bull) bull += 20;
-    if (div.bear) bear += 20;
-    const fibNear = sr.fib.some(f => Math.abs(last.close - f.level) < atr * 0.5);
-    if (fibNear && ms.struct === 'UPTREND') bull += 15;
-    if (fibNear && ms.struct === 'DOWNTREND') bear += 15;
-    if (ms.fb) {
-      if (n >= 2 && closed[n - 2].low < sr.sup && last.close > sr.sup) bull += 25;
-      if (n >= 2 && closed[n - 2].high > sr.res && last.close < sr.res) bear += 25;
-    }
-    if (mtf === 'BULLISH_SAFE') bull += 18; else if (mtf === 'BULLISH_WEAK') bull += 8;
-    if (mtf === 'BEARISH_SAFE') bear += 18; else if (mtf === 'BEARISH_WEAK') bear += 8;
-    if (mom > 0.5 && roc > 0.3) bull += 8;
-    if (mom < -0.5 && roc < -0.3) bear += 8;
-    if (pat === 'DOUBLE_BOTTOM' || pat === 'INV_HS' || pat === 'SUP_BOUNCE') bull += 15;
-    if (pat === 'DOUBLE_TOP' || pat === 'HEAD_SHOULDERS' || pat === 'RES_REJECT') bear += 15;
+
+  // Вычисляем базовые значения для движка
+  const atr  = IND.ATR(closed, 14);
+  const sr   = calcSR(closed);
+  const ms   = marketStructure(closed, atr);
+  const news = newsStatus(sym);
+  const mtf  = mtfConfluence(marketData, sym, tf);
+  const mom  = momentumScore(closed);
+  const manip = manipulationDetector(closed, atr);
+  const pa   = priceActionZones(closed, atr);
+
+  // Запускаем главный скоринг
+  const result = scoreSignal({ c: closed, sym, tf, sr, ms, atr, news });
+
+  // MTF бонус/штраф
+  let mtfBonus = 0;
+  if (mtf.aligned && mtf.count >= 2) {
+    if (mtf.bias === 'BULL' && result.signal === 'BUY')  mtfBonus = Math.round(mtf.strength * 0.1);
+    if (mtf.bias === 'BEAR' && result.signal === 'SELL') mtfBonus = Math.round(mtf.strength * 0.1);
+    if (mtf.bias === 'BULL' && result.signal === 'SELL') mtfBonus = -15;
+    if (mtf.bias === 'BEAR' && result.signal === 'BUY')  mtfBonus = -15;
   }
-  let veto = null;
-  if (ms.spoof) veto = 'SPOOF';
-  if (news.impact === 'HIGH') veto = veto || 'HIGH_NEWS';
-  if (ms.struct === 'RANGE' && adx < 15) veto = veto || 'NO_TREND';
-  const total = Math.max(1, bull + bear);
-  const ratio = (bull - bear) / total;
-  const base_conf = 50 + ratio * 45;
-  const price = last.close;
-  const vol = price > 0 ? atr / price : 0.01;
-  const vol_factor = Math.min(1.1, Math.max(0.75, 1 - (vol - 0.005) * 8));
-  let conf = base_conf * vol_factor;
-  let bonus = 0;
-  if (ms.fb) bonus += 10;
-  if (div.bull || div.bear) bonus += 8;
-  if (adx >= 30) bonus += 6;
-  if (mtf.includes('SAFE')) bonus += 6;
-  if (macd.cross) bonus += 8;
-  if (CALC.CANDLE(closed) !== 'NEUTRAL' && CALC.CANDLE(closed) !== 'DOJI') bonus += 5;
-  bonus = Math.min(18, bonus);
-  conf += bonus;
-  if (news.impact === 'HIGH') conf -= 45;
-  if (news.impact === 'MEDIUM') conf -= 18;
-  if (bb.pctB > 96 || bb.pctB < 4) conf -= 10;
-  if (ms.struct === 'RANGE' && adx < 20) conf -= 15;
-  if (veto === 'SPOOF') conf -= 30;
-  conf = Math.max(10, Math.min(97, conf));
-  let rawSig = 'WAIT';
-  const edge = Math.abs(bull - bear);
-  if (n >= 15 && !veto && conf >= 62 && edge >= 15) {
-    if (bull > bear) rawSig = 'BUY';
-    if (bear > bull) rawSig = 'SELL';
-  }
+
+  // Манипуляция — снижаем уверенность
+  let manipPenalty = 0;
+  if (manip.type === 'PUMP' || manip.type === 'DUMP') manipPenalty = -20;
+  if (manip.type === 'SPOOF') manipPenalty = -25;
+
+  // Финальная уверенность
+  let finalConf = Math.max(10, Math.min(97, result.conf + mtfBonus + manipPenalty));
+
+  // Стабильность сигнала
+  const rawSig = result.signal;
   if (rawSig === data.lastRaw && rawSig !== 'WAIT') {
     data.stable = (data.stable || 0) + 1;
   } else {
@@ -790,20 +714,70 @@ function analyze(sym, tf) {
     data.lastRaw = rawSig;
   }
   data.signal = rawSig;
-  let dispStruct = ms.struct;
+
+  // Структура для отображения
+  let dispStruct = ms.trend;
   if (n < 15) dispStruct = `ACCUM(${n}/15)`;
-  else if (ms.spoof) dispStruct = 'SPOOF!';
-  else if (ms.fb) dispStruct = 'FALSE_BRK';
+  else if (manip.type) dispStruct = manip.type;
+  else if (ms.choch)   dispStruct = ms.choch;
+  else if (ms.bos)     dispStruct = ms.bos;
+
   data.cached = {
-    rsi: rsi.toFixed(1), conf: Math.round(conf), struct: dispStruct, pattern: pat,
-    delta: obv.toFixed(1), sup: sr.sup > 0 ? sr.sup.toFixed(5) : '0',
-    res: sr.res > 0 ? sr.res.toFixed(5) : '0', newsRisk: news.risk, event: news.event,
-    cp, wr: wr.toFixed(1), mom: mom.toFixed(2), bb: bb.pctB.toFixed(1),
-    adx: adx.toFixed(1), stochK: stoch.k.toFixed(1), cci: cci.toFixed(0),
-    bull, bear, mtf, psar: psar.bull ? 'BULL' : 'BEAR',
-    ichi: ichi.above ? 'ABOVE' : ichi.below ? 'BELOW' : 'IN',
-    macdCross: macd.cross || '-', vwapPos: last.close > vwap ? 'ABOVE' : 'BELOW',
-    edge, stable: data.stable || 0
+    // Основные
+    conf: Math.round(finalConf),
+    signal: rawSig,
+    struct: dispStruct,
+    stable: data.stable || 0,
+    // Индикаторы из движка
+    rsi: result.rsi,
+    adx: result.adx,
+    cci: result.cci,
+    stochK: result.stochK,
+    bb: result.bb,
+    wr: result.wr,
+    macdCross: result.macdCross,
+    ichi: result.ichi,
+    psar: result.psar,
+    vwapPos: result.vwapPos,
+    // Паттерны
+    pattern: result.pattern,
+    cp: result.cp,
+    // Smart Money
+    wyckoffPhase: result.wyckoffPhase,
+    vsaType: result.vsaType,
+    spring: result.spring,
+    upthrust: result.upthrust,
+    liqSweep: result.liqSweep,
+    inDemand: result.inDemand,
+    inSupply: result.inSupply,
+    // Elder
+    elder: result.elder,
+    // MTF
+    mtf: mtf.bias + (mtf.aligned ? '_ALIGNED' : ''),
+    mtfStrength: mtf.strength,
+    // Momentum
+    momentum: mom.direction,
+    momScore: mom.score,
+    // Манипуляция
+    manipulation: manip.type,
+    // Price Action
+    paZone: pa.zone,
+    paPosition: pa.position,
+    // Причины сигнала
+    reasons: (result.reasons || []).join(','),
+    // S/R
+    sup: sr.sup > 0 ? sr.sup.toFixed(5) : '0',
+    res: sr.res > 0 ? sr.res.toFixed(5) : '0',
+    // Новости
+    newsRisk: news.risk,
+    event: news.event,
+    // Bull/Bear для отображения
+    bull: result.bull,
+    bear: result.bear,
+    edge: Math.abs(result.rawScore),
+    // Совместимость со старым форматом
+    delta: '0',
+    mom: mom.score.toFixed(2),
   };
 }
 
@@ -1198,22 +1172,42 @@ function render(d) {
         ['BB%B', (x.bb || '50') + '%'],
         ['WR%', x.wr || '0'],
       ];
+      // Smart Money индикаторы
+      const smTags = [];
+      if (x.spring)    smTags.push('<span class="ind-pill ip-bull">🌊 SPRING</span>');
+      if (x.upthrust)  smTags.push('<span class="ind-pill ip-bear">⚡ UPTHRUST</span>');
+      if (x.liqSweep)  smTags.push(\`<span class="ind-pill \${x.liqSweep.includes('BULL')?'ip-bull':'ip-bear'}">💧 \${x.liqSweep}</span>\`);
+      if (x.inDemand)  smTags.push('<span class="ind-pill ip-bull">📦 DEMAND</span>');
+      if (x.inSupply)  smTags.push('<span class="ind-pill ip-bear">📦 SUPPLY</span>');
+      if (x.manipulation) smTags.push(\`<span class="ind-pill ip-gold">⚠️ \${x.manipulation}</span>\`);
+      if (x.wyckoffPhase && x.wyckoffPhase!=='UNKNOWN') smTags.push(\`<span class="ind-pill ip-gold">W: \${x.wyckoffPhase}</span>\`);
+      if (x.vsaType && x.vsaType!=='-') smTags.push(\`<span class="ind-pill \${x.vsaType.includes('BULL')||x.vsaType==='NO_SUPPLY'||x.vsaType==='STOPPING_VOL'?'ip-bull':'ip-bear'}">VSA: \${x.vsaType}</span>\`);
+
       const inds = [
         ['ICHI', x.ichi || 'NEU'],
         ['PSAR', x.psar || 'NEU'],
-        ['MTF', (x.mtf || 'NEUTRAL').replace('BULLISH_','B-').replace('BEARISH_','S-')],
-        ['MACD', x.macdCross && x.macdCross !== '-' ? x.macdCross.replace('_CROSS','') : x.signal !== 'WAIT' ? x.signal==='BUY'?'BULL':'BEAR' : 'NEU'],
+        ['MTF', (x.mtf || 'NEUTRAL').replace('BULL_ALIGNED','B✓').replace('BEAR_ALIGNED','S✓').replace('BULL','B').replace('BEAR','S').replace('NEUTRAL','NEU')],
+        ['MACD', x.macdCross && x.macdCross !== '-' ? x.macdCross : 'NEU'],
         ['VWAP', x.vwapPos || 'NEU'],
-        ['PAT', x.pattern && x.pattern !== 'NO_PATTERN' ? x.pattern : (x.cp || 'NEU')],
+        ['PAT', x.pattern && x.pattern !== 'NONE' ? x.pattern.replace('_',' ') : (x.cp && x.cp!=='NEUTRAL' ? x.cp : 'NEU')],
+        ['MOM', x.momentum || 'NEU'],
+        ['PA', x.paZone || 'NEU'],
       ];
+      // Причины сигнала
+      const reasonsHtml = x.reasons ? \`<div style="font-size:7px;color:var(--text3);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="\${x.reasons}">\${x.reasons}</div>\` : '';
+
       h += \`<div class="card \${sc}">
         \${x.newsRisk ? '<div class="news-badge">⚡ NEWS: ' + x.event + '</div>' : ''}
+        \${x.manipulation ? '<div class="news-badge" style="background:rgba(245,200,66,.1);border-color:var(--gold);color:var(--gold)">⚠️ ' + x.manipulation + '</div>' : ''}
         <div class="c-hdr">
-          <div><div class="c-sym" onclick="copyPair('\${x.sym}')">\${x.sym}</div><div class="c-price">\${x.price}</div></div>
+          <div>
+            <div class="c-sym" onclick="copyPair('\${x.sym}')">\${x.sym.replace('_OTC','').replace('_otc','')} \${x.sym.includes('OTC')?'<span style="font-size:8px;color:var(--cyan);opacity:.7">OTC</span>':'<span style="font-size:8px;color:var(--purple);opacity:.7">FX</span>'}</div>
+            <div class="c-price">\${x.price}</div>
+          </div>
           <div class="c-sig">
             <div class="sig-lbl \${sc}">\${x.signal}</div>
             <div class="sig-exp">\${x.exp}</div>
-            \${x.stable > 1 ? '<div class="sig-stable">CONFIRMED x' + x.stable + '</div>' : ''}
+            \${x.stable > 1 ? '<div class="sig-stable">✓ CONFIRMED x' + x.stable + '</div>' : ''}
           </div>
         </div>
         <div class="cbar">
@@ -1222,7 +1216,9 @@ function render(d) {
         </div>
         <div class="bsbar"><div class="bsbar-b" style="flex:\${bullW}"></div><div class="bsbar-s" style="flex:\${bearW}"></div></div>
         <div class="metrics">\${mets.map(([k,v]) => \`<div class="metric"><div class="metric-l">\${k}</div><div class="metric-v \${metricClass(k, v)}">\${v}</div></div>\`).join('')}</div>
+        \${reasonsHtml}
         <div class="ind-row">\${inds.map(([k,v]) => \`<span class="ind-pill \${indPillClass(v)}">\${k}: \${v}</span>\`).join('')}<span class="ind-pill \${indPillClass(x.struct)}">\${x.struct}</span></div>
+        \${smTags.length ? '<div class="ind-row">' + smTags.join('') + '</div>' : ''}
         <div class="card-actions">
           <button class="btn-copy" onclick="copyPair('\${x.sym}')">⎘ COPY \${x.sym}</button>
           <button class="btn-analysis" onclick="showDetail('\${x.sym}','\${x.tf}')">DETAIL</button>
