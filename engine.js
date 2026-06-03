@@ -928,9 +928,8 @@ function scoreSignal(data) {
     signal,
     conf: signal==='SELL' ? 100-clampedConf : clampedConf,
     rawScore: score,
-    maxScore,
-    reasons: reasons.slice(0,8), // топ-8 причин
-    // Индикаторы для отображения
+    maxScore: FIXED_MAX,
+    reasons: reasons.slice(0,8),
     rsi: rsi.toFixed(1),
     adx: adx.adx.toFixed(1),
     cci: cci.toFixed(0),
@@ -952,8 +951,8 @@ function scoreSignal(data) {
     inDemand: sd.inDemand,
     inSupply: sd.inSupply,
     elder: elder.screen3!=='WAIT'?elder.screen3:elder.screen2,
-    bull: Math.round(bullPct),
-    bear: Math.round(bearPct),
+    bull: clampedConf,
+    bear: 100-clampedConf,
   };
 }
 
