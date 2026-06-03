@@ -769,7 +769,7 @@ function scoreSignal(data) {
   // Используем фиксированный maxScore для стабильной нормализации
 
   let score = 0;
-  const FIXED_MAX = 200; // фиксированный максимум для нормализации
+  const FIXED_MAX = 120; // реалистичный максимум для нормализации
   const reasons = [];
 
   // ── 1. СТРУКТУРА РЫНКА (вес 20) ──
@@ -908,28 +908,124 @@ function scoreSignal(data) {
   if (news.impact==='HIGH')   { score=score*0.3; reasons.push('HIGH_NEWS'); }
   if (news.impact==='MEDIUM') { score=score*0.75; }
 
-  // ── НОРМАЛИЗАЦИЯ с фиксированным максимумом ──
-  // Ограничиваем score в диапазоне [-FIXED_MAX, +FIXED_MAX]
+
+  // ════════════════════════════════════════════════════
+  // ЛОГИКА ПРИНЯТИЯ РЕШЕНИЯ — по принципам Murphy, Nison, Bulkowski, Grimes
+  // ════════════════════════════════════════════════════
+
+  // ── РЕЖИМ РЫНКА (Мёрфи — "Trend is your friend") ──
+  // Определяем: трендовый или консолидация
+  const isTrending = adx.strength === 'TRENDING' || adx.strength === 'STRONG' || adx.strength === 'VERY_STRONG';
+  const isRange    = ms.trend === 'RANGE' || adx.strength === 'NONE' || adx.strength === 'WEAK';
+
+  // ── CONFLUENCE FILTER (Булковски/Грайм) ──
+  // Считаем сколько НЕЗАВИСИМЫХ систем согласны
+  // Независимые системы: тренд, моментум, паттерн, S/R, объём, осцилляторы
+  const bullSystems = [], bearSystems = [];
+
+  // 1. Структура тренда (Мёрфи)
+  if (ms.trend==='UPTREND')   bullSystems.push('TREND');
+  if (ms.trend==='DOWNTREND') bearSystems.push('TREND');
+
+  // 2. Ichimoku облако (независимая система)
+  if (ichi.signal==='BULL'||ichi.signal==='BULL_WEAK') bullSystems.push('ICHI');
+  if (ichi.signal==='BEAR'||ichi.signal==='BEAR_WEAK') bearSystems.push('ICHI');
+
+  // 3. MACD (моментум)
+  if (macd.hist>0 && macd.trend==='BULL_STRONG') bullSystems.push('MACD');
+  if (macd.hist<0 && macd.trend==='BEAR_STRONG') bearSystems.push('MACD');
+  if (macd.cross==='BULL') bullSystems.push('MACD_X');
+  if (macd.cross==='BEAR') bearSystems.push('MACD_X');
+
+  // 4. Осцилляторы (RSI + Stoch)
+  // В тренде — только экстремальные уровни против тренда (откат для входа)
+  // В боковике — стандартные уровни для разворота
+  const oscThreshBull = isRange ? 40 : 30; // в тренде ждём глубокого отката
+  const oscThreshBear = isRange ? 60 : 70;
+  if (rsi < oscThreshBull && stoch.zone === 'OVERSOLD')  bullSystems.push('OSC');
+  if (rsi > oscThreshBear && stoch.zone === 'OVERBOUGHT') bearSystems.push('OSC');
+
+  // 5. Свечной паттерн Нисон (только надёжные >60%)
+  if (cp.direction>0 && cp.reliability>=60) bullSystems.push('CANDLE');
+  if (cp.direction<0 && cp.reliability>=60) bearSystems.push('CANDLE');
+
+  // 6. S/R уровень (торговля от уровня)
+  if (last.close<=sr.sup+atr*0.4&&sr.supS>=2) bullSystems.push('SR');
+  if (last.close>=sr.res-atr*0.4&&sr.resS>=2) bearSystems.push('SR');
+
+  // 7. Smart Money (ICT)
+  if (ms.ob?.type==='BULL' && last.close>=ms.ob.low && last.close<=ms.ob.high*1.002) bullSystems.push('OB');
+  if (ms.ob?.type==='BEAR' && last.close<=ms.ob.high && last.close>=ms.ob.low*0.998) bearSystems.push('OB');
+  if (wyck.spring)   bullSystems.push('SPRING');
+  if (wyck.upthrust) bearSystems.push('UPTHRUST');
+  if (liq.sweepDir==='BULL_SWEEP') bullSystems.push('LIQ');
+  if (liq.sweepDir==='BEAR_SWEEP') bearSystems.push('LIQ');
+
+  // 8. VSA + Supply/Demand (объёмный анализ)
+  if (vsa.signal==='BULL'||sd.inDemand) bullSystems.push('VOL');
+  if (vsa.signal==='BEAR'||sd.inSupply) bearSystems.push('VOL');
+
+  // 9. PSAR + SMA (трендовые индикаторы)
+  if (psar.bull&&sma.above20&&sma.above50) bullSystems.push('TREND_IND');
+  if (!psar.bull&&sma.above20===false&&sma.above50===false) bearSystems.push('TREND_IND');
+
+  // 10. Графический паттерн (Булковски, только надёжность >65%)
+  if (pat.direction>0&&pat.reliability>=65) bullSystems.push('CHART_PAT');
+  if (pat.direction<0&&pat.reliability>=65) bearSystems.push('CHART_PAT');
+
+  const bullCount = bullSystems.length;
+  const bearCount = bearSystems.length;
+
+  // ── НОРМАЛИЗАЦИЯ скоринга ──
   const clampedScore = Math.max(-FIXED_MAX, Math.min(FIXED_MAX, score));
-  // Конвертируем в 0-100: 0=полный медведь, 50=нейтрально, 100=полный бык
   const conf = Math.round(50 + (clampedScore / FIXED_MAX) * 47);
   const clampedConf = Math.max(10, Math.min(94, conf));
 
-  // ── РЕШЕНИЕ — строгие пороги ──
-  const absScore = Math.abs(clampedScore);
+  // ── РЕШЕНИЕ — строгий confluence (Булковски: паттерн без подтверждения = ненадёжен) ──
   let signal = 'WAIT';
-  // Минимальный порог: уверенность >62% И абсолютный счёт >30
-  if (clampedConf >= 63 && absScore >= 30) signal = 'BUY';
-  if (clampedConf <= 37 && absScore >= 30) signal = 'SELL';
-  // Не торгуем в боковике
-  if (ms.trend==='RANGE' && adx.strength==='NONE') signal='WAIT';
+  const absScore = Math.abs(clampedScore);
+
+  // РЕЖИМ ТРЕНДА: нужно минимум 3 системы из 10 + скоринг + ADX
+  if (isTrending) {
+    if (clampedConf >= 62 && bullCount >= 3 && bullCount > bearCount && absScore >= 20)
+      signal = 'BUY';
+    if (clampedConf <= 38 && bearCount >= 3 && bearCount > bullCount && absScore >= 20)
+      signal = 'SELL';
+  }
+  // РЕЖИМ КОНСОЛИДАЦИИ: только от чётких S/R уровней (Нисон — контекст важен)
+  else if (!isRange) {
+    // Торгуем только если есть S/R + паттерн + минимум 3 системы
+    const hasSR = bullSystems.includes('SR') || bearSystems.includes('SR');
+    const hasPattern = bullSystems.includes('CANDLE') || bearSystems.includes('CANDLE') ||
+                       bullSystems.includes('CHART_PAT') || bearSystems.includes('CHART_PAT');
+    if (hasSR && hasPattern) {
+      if (clampedConf >= 64 && bullCount >= 3 && absScore >= 25) signal = 'BUY';
+      if (clampedConf <= 36 && bearCount >= 3 && absScore >= 25) signal = 'SELL';
+    }
+  }
+  // БОКОВИК: не торгуем (Мёрфи — "don't trade choppy markets")
+  // signal остаётся WAIT
+
+  // ── ДОПОЛНИТЕЛЬНЫЕ ФИЛЬТРЫ ──
+  // Новости: не торгуем при HIGH impact
+  if (news.impact==='HIGH') signal = 'WAIT';
+
+  // Манипуляция: не торгуем при спуфинге
+  // (передаётся из server.js через манипуляционный детектор)
+
+  // RSI дивергенция переопределяет тренд (Нисон — дивергенция важнее тренда)
+  if (div.bull && bearCount > bullCount) signal = 'WAIT'; // не продаём при бычьей дивергенции
+  if (div.bear && bullCount > bearCount) signal = 'WAIT'; // не покупаем при медвежьей дивергенции
 
   return {
     signal,
     conf: signal==='SELL' ? 100-clampedConf : clampedConf,
     rawScore: score,
     maxScore: FIXED_MAX,
-    reasons: reasons.slice(0,8),
+    bullSystems: bullCount,
+    bearSystems: bearCount,
+    regime: isTrending?'TREND':isRange?'RANGE':'NEUTRAL',
+    reasons: [...bullSystems.slice(0,4).map(s=>'B:'+s), ...bearSystems.slice(0,4).map(s=>'S:'+s)],
     rsi: rsi.toFixed(1),
     adx: adx.adx.toFixed(1),
     cci: cci.toFixed(0),
