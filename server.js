@@ -11,7 +11,9 @@ const HOST = '0.0.0.0';
 //  НОВЫЙ ДВИЖОК АНАЛИЗА v15
 // ════════════════════════════════════════════════════
 const ENGINE = require('./engine');
-const { IND, scoreSignal, marketStructure, momentumScore, manipulationDetector, priceActionZones, mtfConfluence } = ENGINE;// ════════════════════════════════════════════════════
+const { IND, scoreSignal, calcSR, marketStructure, momentumScore, manipulationDetector, priceActionZones, mtfConfluence } = ENGINE;
+
+// ════════════════════════════════════════════════════
 //  CORS
 // ════════════════════════════════════════════════════
 app.use((req, res, next) => {
@@ -482,138 +484,6 @@ const CALC = {
   }
 };
 
-function calcPivotPoints(c) {
-  if (c.length < 2) return { pp: 0, r1: 0, r2: 0, r3: 0, s1: 0, s2: 0, s3: 0 };
-  const last = c[c.length - 1];
-  const h = last.high, l = last.low, cl = last.close;
-  const pp = (h + l + cl) / 3;
-  return { pp, r1: pp * 2 - l, r2: pp + (h - l), r3: h + 2 * (pp - l), s1: pp * 2 - h, s2: pp - (h - l), s3: l - 2 * (h - pp) };
-}
-
-function calcFibonacci(c) {
-  if (c.length < 20) return [];
-  const win = c.slice(-200);
-  const h = Math.max(...win.map(x => x.high));
-  const l = Math.min(...win.map(x => x.low));
-  const range = h - l;
-  if (range === 0) return [];
-  return [
-    { level: h, name: 'H' },
-    { level: h - range * 0.236, name: 'F23' },
-    { level: h - range * 0.382, name: 'F38' },
-    { level: h - range * 0.5,   name: 'F50' },
-    { level: h - range * 0.618, name: 'F61' },
-    { level: h - range * 0.786, name: 'F78' },
-    { level: l, name: 'L' }
-  ];
-}
-
-function calcSR(c) {
-  if (c.length < 20) return { res: 0, sup: 0, resS: 1, supS: 1, pp: null, fib: [] };
-  const pivot = calcPivotPoints(c);
-  const fib = calcFibonacci(c);
-  const win = c.slice(-200);
-  const hi = [], lo = [];
-  for (let i = 3; i < win.length - 3; i++) {
-    let isHi = true, isLo = true;
-    for (let j = i - 3; j <= i + 3; j++) {
-      if (j === i) continue;
-      if (win[j].high >= win[i].high) isHi = false;
-      if (win[j].low <= win[i].low) isLo = false;
-    }
-    if (isHi) hi.push({ price: win[i].high });
-    if (isLo) lo.push({ price: win[i].low });
-  }
-  const last = win[win.length - 1].close;
-  const tol = last * 0.003;
-  const cluster = (pts) => {
-    const sorted = [...pts].sort((a, b) => a.price - b.price);
-    const g = [];
-    sorted.forEach(p => {
-      const eg = g.find(x => Math.abs(x.price - p.price) <= tol);
-      if (eg) { eg.t++; eg.price = (eg.price * (eg.t - 1) + p.price) / eg.t; }
-      else g.push({ price: p.price, t: 1 });
-    });
-    return g.sort((a, b) => b.t - a.t);
-  };
-  const rg = cluster(hi.filter(h => h.price >= last));
-  const sg = cluster(lo.filter(l => l.price <= last));
-  const fb = Math.max(...win.slice(-30).map(x => x.high));
-  const fl = Math.min(...win.slice(-30).map(x => x.low));
-  return { res: rg[0]?.price || pivot.r1 || fb, sup: sg[0]?.price || pivot.s1 || fl, resS: rg[0]?.t || 1, supS: sg[0]?.t || 1, pp: pivot, fib };
-}
-
-function findSwings(c, left = 3, right = 3) {
-  const hi = [], lo = [];
-  for (let i = left; i < c.length - right; i++) {
-    let ih = true, il = true;
-    for (let j = i - left; j <= i + right; j++) {
-      if (j === i) continue;
-      if (c[j].high >= c[i].high) ih = false;
-      if (c[j].low <= c[i].low) il = false;
-    }
-    if (ih) hi.push({ idx: i, price: c[i].high });
-    if (il) lo.push({ idx: i, price: c[i].low });
-  }
-  return { hi, lo };
-}
-
-function detectPattern(c, sr) {
-  if (c.length < 20) return 'NO_PATTERN';
-  const tail = c.slice(-40);
-  const { hi, lo } = findSwings(tail, 2, 2);
-  if (hi.length >= 2) {
-    const [a, b] = hi.slice(-2);
-    if (Math.abs(a.price - b.price) / a.price < 0.002 && b.idx - a.idx >= 3) return 'DOUBLE_TOP';
-  }
-  if (lo.length >= 2) {
-    const [a, b] = lo.slice(-2);
-    if (Math.abs(a.price - b.price) / a.price < 0.002 && b.idx - a.idx >= 3) return 'DOUBLE_BOTTOM';
-  }
-  if (hi.length >= 3) {
-    const [l, m, r] = hi.slice(-3);
-    if (m.price > l.price && m.price > r.price && Math.abs(l.price - r.price) / m.price < 0.003) return 'HEAD_SHOULDERS';
-  }
-  if (lo.length >= 3) {
-    const [l, m, r] = lo.slice(-3);
-    if (m.price < l.price && m.price < r.price && Math.abs(l.price - r.price) / m.price < 0.003) return 'INV_HS';
-  }
-  const wide = Math.max(...tail.map(x => x.high)) - Math.min(...tail.map(x => x.low));
-  const narrow = Math.max(...tail.slice(-8).map(x => x.high)) - Math.min(...tail.slice(-8).map(x => x.low));
-  if (narrow < wide * 0.3) return 'SQUEEZE';
-  const last = c[c.length - 1].close;
-  const atr = CALC.ATR(c.slice(-20), 10);
-  const th = Math.max(last * 0.0005, atr * 0.35);
-  if (Math.abs(last - sr.sup) <= th) return 'SUP_BOUNCE';
-  if (Math.abs(last - sr.res) <= th) return 'RES_REJECT';
-  return 'NO_PATTERN';
-}
-
-function marketStruct(c, sr, atr) {
-  if (c.length < 12) return { struct: 'CALC', fb: false, spoof: false };
-  const last = c[c.length - 1], prev = c[c.length - 2];
-  let fb = false;
-  if (prev.high > sr.res && last.close < sr.res && (last.high - last.close) > atr * 0.4) fb = true;
-  if (prev.low < sr.sup && last.close > sr.sup && (last.close - last.low) > atr * 0.4) fb = true;
-  const body = Math.abs(last.close - last.open);
-  const uw = last.high - Math.max(last.close, last.open);
-  const lw = Math.min(last.close, last.open) - last.low;
-  const rng = Math.max(1e-9, last.high - last.low);
-  const volAvg = c.slice(-20).reduce((a, b) => a + b.volume, 0) / 20;
-  const spoof = ((uw > atr * 1.5 || lw > atr * 1.5) && body < rng * 0.2) ||
-    (volAvg > 0 && last.volume > volAvg * 4 && body < rng * 0.2);
-  const win = c.slice(-20);
-  const sw = findSwings(win, 2, 2);
-  const hh = sw.hi.length >= 2 && sw.hi[sw.hi.length - 1].price > sw.hi[0].price;
-  const hl = sw.lo.length >= 2 && sw.lo[sw.lo.length - 1].price > sw.lo[0].price;
-  const lh = sw.hi.length >= 2 && sw.hi[sw.hi.length - 1].price < sw.hi[0].price;
-  const ll = sw.lo.length >= 2 && sw.lo[sw.lo.length - 1].price < sw.lo[0].price;
-  let struct = 'RANGE';
-  if (hh && hl) struct = 'UPTREND';
-  else if (lh && ll) struct = 'DOWNTREND';
-  return { struct, fb, spoof };
-}
-
 function newsStatus(sym) {
   const now = Date.now();
   const active = economicNews.filter(n => {
@@ -626,27 +496,6 @@ function newsStatus(sym) {
   if (!active.length) return { risk: false, impact: 'NONE', event: '' };
   const maxN = active.sort((a, b) => ({ HIGH: 3, MEDIUM: 2, LOW: 1 }[b.impact] - { HIGH: 3, MEDIUM: 2, LOW: 1 }[a.impact]))[0];
   return { risk: true, impact: maxN.impact, event: maxN.event };
-}
-
-function mtfStruct(sym, tf) {
-  const order = ['M1', 'M5', 'M15', 'M30', 'H1'];
-  const idx = order.indexOf(tf);
-  if (idx < 0 || idx >= order.length - 1) return 'NEUTRAL';
-  const htf = order[idx + 1];
-  if (!marketData[sym] || !marketData[sym][htf]) return 'NEUTRAL';
-  const s = marketData[sym][htf].cached;
-  if (!s) return 'NEUTRAL';
-  if (s.struct === 'UPTREND') return s.rsi < 70 ? 'BULLISH_SAFE' : 'BULLISH_WEAK';
-  if (s.struct === 'DOWNTREND') return s.rsi > 30 ? 'BEARISH_SAFE' : 'BEARISH_WEAK';
-  return 'NEUTRAL';
-}
-
-function trendStrength(ema5, ema8, ema13, ema21, ema50, close) {
-  let score = 0;
-  if (close > ema5) score++; if (ema5 > ema8) score++;
-  if (ema8 > ema13) score++; if (ema13 > ema21) score++;
-  if (ema21 > ema50) score++;
-  return score;
 }
 
 function analyze(sym, tf) {
