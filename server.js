@@ -519,7 +519,8 @@ function analyze(sym, tf) {
   }
 
   const last = closed[n - 1];
-  if (data.lastTS === last.timestamp && data.cached) return;
+  // ✅ FIX: Removed aggressive caching that froze signals
+  // Always recalculate to ensure signals update properly
   data.lastTS = last.timestamp;
 
   // Вычисляем базовые значения для движка
@@ -552,15 +553,26 @@ function analyze(sym, tf) {
   // Финальная уверенность
   let finalConf = Math.max(10, Math.min(97, result.conf + mtfBonus + manipPenalty));
 
-  // Стабильность сигнала
+  // Стабильность сигнала с гистерезисом — предотвращение частых переключений
   const rawSig = result.signal;
-  if (rawSig === data.lastRaw && rawSig !== 'WAIT') {
-    data.stable = (data.stable || 0) + 1;
-  } else {
-    data.stable = rawSig !== 'WAIT' ? 1 : 0;
-    data.lastRaw = rawSig;
+  const prevConf = data.cached?.conf || 0;
+  const confChange = Math.abs(finalConf - prevConf);
+  
+  // Только переключаем сигнал если:
+  // 1. Новый сигнал более уверен (на 10+ пункты)
+  // 2. Новый сигнал WAIT (всегда разрешено)
+  // 3. Сигнал другой (BUY→SELL или наоборот)
+  let updatedSig = data.lastRaw || 'WAIT';
+  if (rawSig === 'WAIT' || confChange >= 10 || (rawSig !== data.lastRaw && finalConf >= 62)) {
+    updatedSig = rawSig;
+    if (updatedSig === data.lastRaw && updatedSig !== 'WAIT') {
+      data.stable = (data.stable || 0) + 1;
+    } else {
+      data.stable = updatedSig !== 'WAIT' ? 1 : 0;
+      data.lastRaw = updatedSig;
+    }
   }
-  data.signal = rawSig;
+  data.signal = updatedSig;
 
   // Структура для отображения
   let dispStruct = ms.trend;
@@ -572,7 +584,7 @@ function analyze(sym, tf) {
   data.cached = {
     // Основные
     conf: Math.round(finalConf),
-    signal: rawSig,
+    signal: updatedSig,
     struct: dispStruct,
     stable: data.stable || 0,
     // Индикаторы из движка
