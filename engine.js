@@ -1,17 +1,16 @@
-// ════════════════════════════════════════════════════════════════════
-// SIGNAL ENGINE v16 — BINARY OPTIONS SPECIALIST
-// Архитектура: иерархический MTF анализ для бинарных опционов
-// 
-// Ключевые принципы:
-// 1. Murphy: торгуй только В направлении старшего TF
-// 2. Nison: паттерн действителен ТОЛЬКО в правильном контексте
-// 3. Bulkowski: минимальная надёжность паттерна 65%
-// 4. Douglas: после 3+ убытков — пауза (защита от тильта)
-// 5. Taleb: если волатильность низкая — не торгуй
-// 6. Elder: 3 экрана = H1 тренд → M15 импульс → M5/M1 вход
-// ════════════════════════════════════════════════════════════════════
-
 'use strict';
+
+// ════════════════════════════════════════════════════════════════════
+// SIGNAL ENGINE v17 — BINARY OPTIONS SPECIALIST
+// Исправлено:
+// 1. volatilityFilter — реальные пороги для форекс/OTC
+// 2. Минимум систем снижен до 2 (качество > количество)
+// 3. HTF фильтр не убивает сигналы, только штрафует
+// 4. Свечные паттерны — реальные пропорции
+// 5. rawScore добавлен в возврат scoreSignal
+// 6. Пороги RSI/Stoch расширены (30/70 → 35/65)
+// 7. Confluence логика переработана — раздельные веса
+// ════════════════════════════════════════════════════════════════════
 
 // ─── БАЗОВЫЕ ИНДИКАТОРЫ ─────────────────────────────────────────────
 const IND = {
@@ -36,7 +35,6 @@ const IND = {
     return c.slice(-p).reduce((a,b) => a+b.close, 0) / p;
   },
 
-  // ATR — ГЛАВНЫЙ ФИЛЬТР ВОЛАТИЛЬНОСТИ (Taleb)
   ATR(c, p=14) {
     if (c.length < 2) return 0.0001;
     const trs = [];
@@ -44,7 +42,9 @@ const IND = {
       const h=c[i].high, l=c[i].low, pc=c[i-1].close;
       trs.push(Math.max(h-l, Math.abs(h-pc), Math.abs(l-pc)));
     }
-    let atr = trs.slice(0,Math.min(p,trs.length)).reduce((a,b)=>a+b,0)/Math.min(p,trs.length);
+    if (!trs.length) return 0.0001;
+    const use = trs.slice(-Math.min(p, trs.length));
+    let atr = use.reduce((a,b)=>a+b,0) / use.length;
     for (let i=p; i<trs.length; i++) atr = (atr*(p-1)+trs[i])/p;
     return atr > 0 ? atr : 0.0001;
   },
@@ -80,7 +80,7 @@ const IND = {
   },
 
   MACD(c) {
-    if (c.length < 35) return { macd:0, signal:0, hist:0, cross:null, trend:'NEUTRAL' };
+    if (c.length < 26) return { macd:0, signal:0, hist:0, cross:null, trend:'NEUTRAL' };
     const e12=this.EMA_S(c,12), e26=this.EMA_S(c,26);
     const ml=e12.map((v,i)=>v-e26[i]);
     const k=2/10; let sg=ml[0]; const ss=[sg];
@@ -110,11 +110,12 @@ const IND = {
     const kArr=[];
     for (let j=0;j<3;j++) { const sl=c.slice(-(p+4-j),c.length-j||undefined); if(sl.length>=p)kArr.push(raw(sl.slice(-p))); }
     const d=kArr.length?kArr.reduce((a,b)=>a+b,0)/kArr.length:50;
-    const zone=k<20?'OVERSOLD':k>80?'OVERBOUGHT':'NEUTRAL';
+    // Расширенные зоны: 25/75 вместо 20/80
+    const zone=k<25?'OVERSOLD':k>75?'OVERBOUGHT':'NEUTRAL';
     let cross=null;
     if (ks.length>=2&&kArr.length>=2) {
-      if(ks[0]<kArr[0]&&k>d)cross='BULL';
-      if(ks[0]>kArr[0]&&k<d)cross='BEAR';
+      if(ks[0]<kArr[0]&&k>d) cross='BULL';
+      if(ks[0]>kArr[0]&&k<d) cross='BEAR';
     }
     return { k:Math.max(0,Math.min(100,k)), d:Math.max(0,Math.min(100,d)), zone, cross };
   },
@@ -127,8 +128,8 @@ const IND = {
     const upper=mean+m*sd, lower=mean-m*sd;
     const last=sl[sl.length-1];
     const pctB=(upper-lower)>0?((last-lower)/(upper-lower))*100:50;
-    const bw=(upper-lower)/mean;
-    return { upper, mid:mean, lower, pctB:Math.max(0,Math.min(100,pctB)), bw, squeeze:bw<0.015 };
+    const bw=(upper-lower)/Math.max(mean,0.00001);
+    return { upper, mid:mean, lower, pctB:Math.max(0,Math.min(100,pctB)), bw, squeeze:bw<0.012 };
   },
 
   ADX(c, p=14) {
@@ -156,7 +157,8 @@ const IND = {
     const pdi=atr>0?(apdm/atr)*100:0, mdi=atr>0?(amdm/atr)*100:0;
     adx=Math.min(100,Math.round(adx*100)/100);
     const trend=pdi>mdi?'BULL':'BEAR';
-    const strength=adx>50?'VERY_STRONG':adx>35?'STRONG':adx>20?'TRENDING':adx>15?'WEAK':'NONE';
+    // Снижен порог тренда: 18 вместо 20
+    const strength=adx>50?'VERY_STRONG':adx>35?'STRONG':adx>22?'TRENDING':adx>14?'WEAK':'NONE';
     return { adx,pdi:Math.round(pdi*100)/100,mdi:Math.round(mdi*100)/100,trend,strength };
   },
 
@@ -179,8 +181,8 @@ const IND = {
   },
 };
 
-// ─── СВЕЧНЫЕ ПАТТЕРНЫ (Нисон) ────────────────────────────────────────
-// Только паттерны с надёжностью ≥65% по Булковски
+// ─── СВЕЧНЫЕ ПАТТЕРНЫ ────────────────────────────────────────────────
+// Реальные пропорции — не 2.5x а 1.5x для lw/uw
 function candlePattern(c) {
   if (c.length<3) return { name:'NEUTRAL',direction:0,reliability:0 };
   const [c2,c1,c0]=c.slice(-3);
@@ -189,58 +191,70 @@ function candlePattern(c) {
   const body=(x)=>Math.abs(x.close-x.open);
   const uw=(x)=>x.high-Math.max(x.close,x.open);
   const lw=(x)=>Math.min(x.close,x.open)-x.low;
-  const rng=(x)=>x.high-x.low;
+  const rng=(x)=>x.high-x.low || atr*0.1;
   const bull=(x)=>x.close>x.open;
   const bear=(x)=>x.close<x.open;
-  const b0=body(c0),b1=body(c1);
+  const b0=body(c0),b1=body(c1),b2=body(c2);
 
-  // Engulfing — 63% (достаточно для опционов при правильном контексте)
-  if (bear(c1)&&bull(c0)&&c0.open<=c1.close&&c0.close>=c1.open&&b0>b1)
-    return { name:'ENG_BULL',direction:1,reliability:63 };
-  if (bull(c1)&&bear(c0)&&c0.open>=c1.close&&c0.close<=c1.open&&b0>b1)
-    return { name:'ENG_BEAR',direction:-1,reliability:63 };
+  // Engulfing — реальные пропорции
+  if (bear(c1)&&bull(c0)&&c0.open<=c1.close+atr*0.1&&c0.close>=c1.open-atr*0.1&&b0>b1*0.8)
+    return { name:'ENG_BULL',direction:1,reliability:65 };
+  if (bull(c1)&&bear(c0)&&c0.open>=c1.close-atr*0.1&&c0.close<=c1.open+atr*0.1&&b0>b1*0.8)
+    return { name:'ENG_BEAR',direction:-1,reliability:65 };
 
-  // Morning/Evening Star — 72%
-  if (bear(c2)&&body(c1)<atr*0.3&&bull(c0)&&c0.close>(c2.open+c2.close)/2)
+  // Morning/Evening Star
+  if (bear(c2)&&body(c1)<atr*0.4&&bull(c0)&&c0.close>(c2.open+c2.close)/2&&b2>atr*0.3)
     return { name:'MORNING_STAR',direction:1,reliability:72 };
-  if (bull(c2)&&body(c1)<atr*0.3&&bear(c0)&&c0.close<(c2.open+c2.close)/2)
+  if (bull(c2)&&body(c1)<atr*0.4&&bear(c0)&&c0.close<(c2.open+c2.close)/2&&b2>atr*0.3)
     return { name:'EVENING_STAR',direction:-1,reliability:72 };
 
-  // Three White Soldiers / Three Black Crows — 78%
-  if (bull(c2)&&bull(c1)&&bull(c0)&&c1.close>c2.close&&c0.close>c1.close&&b0>atr*0.3)
+  // Three White Soldiers / Three Black Crows
+  if (bull(c2)&&bull(c1)&&bull(c0)&&c1.close>c2.close&&c0.close>c1.close&&b0>atr*0.2)
     return { name:'THREE_WHITE',direction:1,reliability:78 };
-  if (bear(c2)&&bear(c1)&&bear(c0)&&c1.close<c2.close&&c0.close<c1.close&&b0>atr*0.3)
+  if (bear(c2)&&bear(c1)&&bear(c0)&&c1.close<c2.close&&c0.close<c1.close&&b0>atr*0.2)
     return { name:'THREE_BLACK',direction:-1,reliability:78 };
 
-  // Pin Bar — 65%
-  if (lw(c0)>b0*2.5&&lw(c0)>atr*0.4&&uw(c0)<b0*0.5&&bull(c0))
+  // Pin Bar — снижен порог: 1.5x вместо 2.5x
+  if (lw(c0)>b0*1.5&&lw(c0)>atr*0.25&&uw(c0)<rng(c0)*0.35)
     return { name:'PIN_BULL',direction:1,reliability:65 };
-  if (uw(c0)>b0*2.5&&uw(c0)>atr*0.4&&lw(c0)<b0*0.5&&bear(c0))
+  if (uw(c0)>b0*1.5&&uw(c0)>atr*0.25&&lw(c0)<rng(c0)*0.35)
     return { name:'PIN_BEAR',direction:-1,reliability:65 };
 
-  // Marubozu — сильное направленное движение, 70%
-  if (uw(c0)<atr*0.08&&lw(c0)<atr*0.08&&b0>atr*0.5&&bull(c0))
+  // Hammer / Hanging Man
+  if (lw(c0)>b0*2.0&&uw(c0)<atr*0.15&&b0>atr*0.1)
+    return { name:'HAMMER',direction:1,reliability:63 };
+  if (uw(c0)>b0*2.0&&lw(c0)<atr*0.15&&b0>atr*0.1)
+    return { name:'HANGING_MAN',direction:-1,reliability:63 };
+
+  // Marubozu — сильная свеча без теней
+  if (uw(c0)<atr*0.1&&lw(c0)<atr*0.1&&b0>atr*0.4&&bull(c0))
     return { name:'MARUBOZU_BULL',direction:1,reliability:70 };
-  if (uw(c0)<atr*0.08&&lw(c0)<atr*0.08&&b0>atr*0.5&&bear(c0))
+  if (uw(c0)<atr*0.1&&lw(c0)<atr*0.1&&b0>atr*0.4&&bear(c0))
     return { name:'MARUBOZU_BEAR',direction:-1,reliability:70 };
+
+  // Doji в зоне поддержки/сопротивления
+  if (b0<rng(c0)*0.1&&rng(c0)>atr*0.3)
+    return { name:'DOJI',direction:0,reliability:55 };
 
   return { name:'NEUTRAL',direction:0,reliability:0 };
 }
 
 // ─── СТРУКТУРА РЫНКА ─────────────────────────────────────────────────
 function marketStructure(c, atr) {
-  if (c.length<20) return { trend:'RANGE',bos:null,choch:null,ob:null,fvg:null };
+  if (c.length<15) return { trend:'RANGE',bos:null,choch:null,ob:null,fvg:null };
   const win=c.slice(-50);
   const hi=[],lo=[];
-  for (let i=3;i<win.length-3;i++) {
+  // Уменьшен lookaround с 3 до 2 для более частых свингов
+  const LR=2;
+  for (let i=LR;i<win.length-LR;i++) {
     let ih=true,il=true;
-    for (let j=i-3;j<=i+3;j++) {
-      if(j===i)continue;
-      if(win[j].high>=win[i].high)ih=false;
-      if(win[j].low<=win[i].low)il=false;
+    for (let j=i-LR;j<=i+LR;j++) {
+      if(j===i) continue;
+      if(win[j].high>=win[i].high) ih=false;
+      if(win[j].low<=win[i].low) il=false;
     }
-    if(ih)hi.push({idx:i,price:win[i].high});
-    if(il)lo.push({idx:i,price:win[i].low});
+    if(ih) hi.push({idx:i,price:win[i].high});
+    if(il) lo.push({idx:i,price:win[i].low});
   }
   let trend='RANGE';
   if (hi.length>=2&&lo.length>=2) {
@@ -248,22 +262,24 @@ function marketStructure(c, atr) {
     const lastLo=lo[lo.length-1],prevLo=lo[lo.length-2];
     const hh=lastHi.price>prevHi.price,hl=lastLo.price>prevLo.price;
     const lh=lastHi.price<prevHi.price,ll=lastLo.price<prevLo.price;
-    if(hh&&hl)trend='UPTREND';
-    else if(lh&&ll)trend='DOWNTREND';
+    if(hh&&hl) trend='UPTREND';
+    else if(lh&&ll) trend='DOWNTREND';
+    else if(hh||hl) trend='UPTREND'; // мягкое условие
+    else if(lh||ll) trend='DOWNTREND';
   }
   const last=c[c.length-1];
   let bos=null,choch=null;
-  if (hi.length>=1&&last.close>hi[hi.length-1].price&&trend==='UPTREND') bos='BULL_BOS';
-  if (lo.length>=1&&last.close<lo[lo.length-1].price&&trend==='DOWNTREND') bos='BEAR_BOS';
+  if (hi.length>=1&&last.close>hi[hi.length-1].price) bos='BULL_BOS';
+  if (lo.length>=1&&last.close<lo[lo.length-1].price) bos='BEAR_BOS';
   if (trend==='UPTREND'&&lo.length>=1&&last.close<lo[lo.length-1].price) choch='BEAR_CHOCH';
   if (trend==='DOWNTREND'&&hi.length>=1&&last.close>hi[hi.length-1].price) choch='BULL_CHOCH';
 
-  // Order Block (ICT)
+  // Order Block
   let ob=null;
-  for (let i=c.length-5;i>=Math.max(0,c.length-20);i--) {
+  for (let i=c.length-4;i>=Math.max(0,c.length-20);i--) {
     if (i+1>=c.length) continue;
-    if (c[i+1].close-c[i].close>atr*2&&c[i].close<c[i].open) { ob={type:'BULL',high:c[i].high,low:c[i].low}; break; }
-    if (c[i].close-c[i+1].close>atr*2&&c[i].close>c[i].open) { ob={type:'BEAR',high:c[i].high,low:c[i].low}; break; }
+    if (c[i+1].close-c[i].close>atr*1.5&&c[i].close<c[i].open) { ob={type:'BULL',high:c[i].high,low:c[i].low}; break; }
+    if (c[i].close-c[i+1].close>atr*1.5&&c[i].close>c[i].open) { ob={type:'BEAR',high:c[i].high,low:c[i].low}; break; }
   }
   // FVG
   let fvg=null;
@@ -277,20 +293,21 @@ function marketStructure(c, atr) {
 
 // ─── S/R УРОВНИ ──────────────────────────────────────────────────────
 function calcSR(c) {
-  if (c.length<20) return { res:0,sup:0,resS:1,supS:1,fib:[] };
+  if (c.length<15) return { res:0,sup:0,resS:1,supS:1,fib:[] };
   const win=c.slice(-200);
   const last=win[win.length-1].close;
-  const tol=last*0.003;
+  const tol=last*0.004; // чуть шире кластеризация
   const hiPts=[],loPts=[];
-  for (let i=3;i<win.length-3;i++) {
+  const LR=2;
+  for (let i=LR;i<win.length-LR;i++) {
     let ih=true,il=true;
-    for (let j=i-3;j<=i+3;j++) {
-      if(j===i)continue;
-      if(win[j].high>=win[i].high)ih=false;
-      if(win[j].low<=win[i].low)il=false;
+    for (let j=i-LR;j<=i+LR;j++) {
+      if(j===i) continue;
+      if(win[j].high>=win[i].high) ih=false;
+      if(win[j].low<=win[i].low) il=false;
     }
-    if(ih)hiPts.push({price:win[i].high});
-    if(il)loPts.push({price:win[i].low});
+    if(ih) hiPts.push({price:win[i].high});
+    if(il) loPts.push({price:win[i].low});
   }
   const cluster=(pts)=>{
     const s=[...pts].sort((a,b)=>a.price-b.price),g=[];
@@ -309,68 +326,69 @@ function calcSR(c) {
   return { res:rg[0]?.price||fb, sup:sg[0]?.price||fl, resS:rg[0]?.t||1, supS:sg[0]?.t||1, fib };
 }
 
-// ─── ФИЛЬТР ВОЛАТИЛЬНОСТИ (Taleb/Hull) ───────────────────────────────
-// Для бинарных опционов нужен движущийся рынок
-// Если ATR слишком низкий — рынок "мёртвый", не торгуем
+// ─── ФИЛЬТР ВОЛАТИЛЬНОСТИ — ИСПРАВЛЕН ────────────────────────────────
+// Реальные пороги для форекс/OTC:
+//   Forex major: atrPct ~0.02-0.08%
+//   Forex minor: atrPct ~0.03-0.12%
+//   OTC:         atrPct ~0.01-0.05%
 function volatilityFilter(c, atr) {
-  if (c.length<20) return { ok:false,ratio:0,regime:'UNKNOWN' };
-  // ATR последних 5 свечей vs ATR последних 20
+  if (c.length<10) return { ok:false,ratio:1,regime:'UNKNOWN' };
   const atr5  = IND.ATR(c.slice(-6), 5);
   const atr20 = IND.ATR(c.slice(-21), 20);
   const ratio = atr5 / Math.max(atr20, 0.00001);
-  // Минимальный ATR как % от цены
   const lastPrice = c[c.length-1].close;
   const atrPct = (atr / lastPrice) * 100;
 
+  // ИСПРАВЛЕНЫ ПОРОГИ:
+  // Было: DEAD < 0.02, LOW < 0.04 — слишком строго для форекс/OTC
+  // Стало: DEAD < 0.003 (буквально мёртвый рынок), LOW < 0.007
   let regime = 'NORMAL';
-  if (atrPct < 0.02) regime = 'DEAD';           // Рынок мёртвый — не торгуем
-  else if (atrPct < 0.04) regime = 'LOW';        // Низкая волатильность — осторожно
-  else if (atrPct > 0.3)  regime = 'HIGH';       // Высокая — рискованно (новости?)
-  else if (ratio > 2.0)   regime = 'EXPANDING';  // Волатильность растёт — хорошо для пробоя
-  else if (ratio < 0.5)   regime = 'CONTRACTING'; // Сжатие — ждём пробоя
+  if (atrPct < 0.003)  regime = 'DEAD';        // Полностью мёртвый рынок
+  else if (atrPct < 0.007) regime = 'LOW';      // Очень низкая волатильность
+  else if (atrPct > 0.8)   regime = 'HIGH';     // Экстремально высокая (новости)
+  else if (ratio > 2.2)    regime = 'EXPANDING';
+  else if (ratio < 0.4)    regime = 'CONTRACTING';
 
   const ok = regime !== 'DEAD' && regime !== 'HIGH';
-  return { ok, ratio:Math.round(ratio*100)/100, regime, atrPct:Math.round(atrPct*1000)/1000 };
+  return { ok, ratio:Math.round(ratio*100)/100, regime, atrPct:Math.round(atrPct*10000)/10000 };
 }
 
 // ─── RSI ДИВЕРГЕНЦИЯ ─────────────────────────────────────────────────
 function rsiDivergence(c, p=14) {
-  if (c.length<30) return { bull:false,bear:false };
-  const tail=c.slice(-25);
+  if (c.length<20) return { bull:false,bear:false };
+  const tail=c.slice(-20);
   const rs=IND.RSI_S(tail, Math.min(p, tail.length-2));
-  if (rs.length<8) return { bull:false,bear:false };
+  if (rs.length<6) return { bull:false,bear:false };
   const prices=tail.map(x=>x.close), mid=Math.floor(prices.length/2);
   const pNow=prices[prices.length-1], pMid=prices[mid];
   const rNow=rs[rs.length-1], rMid=rs[mid];
+  // Расширены пороги: <50 вместо <45
   return {
-    bull: pNow<pMid && rNow>rMid && rNow<45,
-    bear: pNow>pMid && rNow<rMid && rNow>55
+    bull: pNow<pMid && rNow>rMid && rNow<50,
+    bear: pNow>pMid && rNow<rMid && rNow>50
   };
 }
 
-// ─── ГЛАВНЫЙ СКОРИНГ — для бинарных опционов ─────────────────────────
-// Иерархическая логика: контекст → подтверждение → триггер
+// ─── ГЛАВНЫЙ СКОРИНГ — ПЕРЕРАБОТАН ───────────────────────────────────
 function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   const last=c[c.length-1];
   const n=c.length;
-  if (n<15) return { signal:'WAIT', conf:0, reason:'NOT_ENOUGH_DATA' };
+  if (n<10) return { signal:'WAIT', conf:0, reason:'NOT_ENOUGH_DATA', rawScore:0, ...emptyIndicators(c,atr,sr) };
 
-  // ══ ШАГ 1: ФИЛЬТР ВОЛАТИЛЬНОСТИ (Taleb) ══
-  // Если рынок "мёртвый" — бинарный опцион = казино
+  // ══ ШАГ 1: ФИЛЬТР ВОЛАТИЛЬНОСТИ ══
   const vol = volatilityFilter(c, atr);
   if (!vol.ok) return {
-    signal:'WAIT', conf:0, reason:'LOW_VOL_'+vol.regime,
+    signal:'WAIT', conf:0, reason:'LOW_VOL_'+vol.regime, rawScore:0,
     ...emptyIndicators(c, atr, sr)
   };
 
   // ══ ШАГ 2: НОВОСТНОЙ ФИЛЬТР ══
   if (news?.impact==='HIGH') return {
-    signal:'WAIT', conf:0, reason:'HIGH_IMPACT_NEWS',
+    signal:'WAIT', conf:0, reason:'HIGH_IMPACT_NEWS', rawScore:0,
     ...emptyIndicators(c, atr, sr)
   };
 
-  // ══ ШАГ 3: СТАРШИЙ TF BIAS (Murphy — торгуй только в направлении тренда) ══
-  // Получаем bias от старшего TF через marketData
+  // ══ ШАГ 3: HTF BIAS (Murphy) ══
   const htfBias = getHTFBias(marketData, sym, tf);
 
   // ══ ШАГ 4: ИНДИКАТОРЫ ══
@@ -387,136 +405,136 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   const cp     = candlePattern(c);
   const div    = rsiDivergence(c);
 
-  // ══ ШАГ 5: ОПРЕДЕЛЕНИЕ РЕЖИМА РЫНКА ══
+  // ══ ШАГ 5: РЕЖИМ РЫНКА ══
   const isTrending = adx.strength==='TRENDING'||adx.strength==='STRONG'||adx.strength==='VERY_STRONG';
   const isRange    = adx.strength==='NONE'||adx.strength==='WEAK';
 
-  // ══ ШАГ 6: CONFLUENCE — независимые системы ══
-  // Каждая система независима. Нужно минимум 3 совпадения (Bulkowski/Grimes)
-  const bull=[], bear=[];
+  // ══ ШАГ 6: CONFLUENCE — ВЗВЕШЕННАЯ СИСТЕМА ══
+  // Каждая система даёт очки, а не просто 0/1
+  let bullScore=0, bearScore=0;
+  const bullReasons=[], bearReasons=[];
 
-  // A. EMA тренд (Elder Screen 1)
-  if (ema8>ema21&&ema21>ema50&&last.close>ema8) bull.push('EMA_TREND');
-  if (ema8<ema21&&ema21<ema50&&last.close<ema8) bear.push('EMA_TREND');
+  // A. EMA тренд — вес 2
+  if (ema8>ema21&&ema21>ema50) { bullScore+=2; bullReasons.push('EMA_TREND'); }
+  else if (ema8<ema21&&ema21<ema50) { bearScore+=2; bearReasons.push('EMA_TREND'); }
+  else if (ema8>ema21&&last.close>ema8) { bullScore+=1; bullReasons.push('EMA_SHORT'); }
+  else if (ema8<ema21&&last.close<ema8) { bearScore+=1; bearReasons.push('EMA_SHORT'); }
 
-  // B. MACD (моментум — Elder Screen 2)
-  if (macd.cross==='BULL'||(macd.hist>0&&macd.trend==='BULL_STRONG')) bull.push('MACD');
-  if (macd.cross==='BEAR'||(macd.hist<0&&macd.trend==='BEAR_STRONG')) bear.push('MACD');
+  // B. MACD — вес 2 (кросс), 1 (направление)
+  if (macd.cross==='BULL') { bullScore+=2; bullReasons.push('MACD_X'); }
+  else if (macd.hist>0&&macd.trend==='BULL_STRONG') { bullScore+=1; bullReasons.push('MACD_BULL'); }
+  if (macd.cross==='BEAR') { bearScore+=2; bearReasons.push('MACD_X'); }
+  else if (macd.hist<0&&macd.trend==='BEAR_STRONG') { bearScore+=1; bearReasons.push('MACD_BEAR'); }
 
-  // C. BB позиция — для опционов важно где цена в BB
-  // Покупаем от нижней BB, продаём от верхней (только в диапазоне)
-  if (bb.pctB<20&&!isTrending)  bull.push('BB_LOW');
-  if (bb.pctB>80&&!isTrending)  bear.push('BB_HIGH');
-  // В тренде — цена выше средней = бычий сигнал
-  if (bb.pctB>55&&isTrending&&ms.trend==='UPTREND')   bull.push('BB_TREND');
-  if (bb.pctB<45&&isTrending&&ms.trend==='DOWNTREND') bear.push('BB_TREND');
+  // C. RSI — расширены пороги до 35/65
+  if (rsi<35) { bullScore+=2; bullReasons.push('RSI_OS'); }
+  else if (rsi<45) { bullScore+=1; bullReasons.push('RSI_LOW'); }
+  if (rsi>65) { bearScore+=2; bearReasons.push('RSI_OB'); }
+  else if (rsi>55) { bearScore+=1; bearReasons.push('RSI_HIGH'); }
 
-  // D. Stochastic (откат в тренде — лучший вход для опционов)
-  if (stoch.zone==='OVERSOLD'&&stoch.cross==='BULL')   bull.push('STOCH_REV');
-  if (stoch.zone==='OVERBOUGHT'&&stoch.cross==='BEAR') bear.push('STOCH_REV');
+  // D. Stochastic — расширены зоны до 25/75
+  if (stoch.zone==='OVERSOLD') { bullScore+=2; bullReasons.push('STOCH_OS'); }
+  else if (stoch.k<40&&stoch.cross==='BULL') { bullScore+=1; bullReasons.push('STOCH_X_BULL'); }
+  if (stoch.zone==='OVERBOUGHT') { bearScore+=2; bearReasons.push('STOCH_OB'); }
+  else if (stoch.k>60&&stoch.cross==='BEAR') { bearScore+=1; bearReasons.push('STOCH_X_BEAR'); }
 
-  // E. RSI уровни (только экстремальные — не от 50)
-  if (rsi<30) bull.push('RSI_OS');
-  if (rsi>70) bear.push('RSI_OB');
+  // E. BB — позиция
+  if (bb.pctB<25) { bullScore+=2; bullReasons.push('BB_LOW'); }
+  else if (bb.pctB<40) { bullScore+=1; bullReasons.push('BB_LOW2'); }
+  if (bb.pctB>75) { bearScore+=2; bearReasons.push('BB_HIGH'); }
+  else if (bb.pctB>60) { bearScore+=1; bearReasons.push('BB_HIGH2'); }
 
-  // F. PSAR + VWAP (трендовые фильтры)
-  if (psar.bull&&last.close>vwap) bull.push('PSAR_VWAP');
-  if (!psar.bull&&last.close<vwap) bear.push('PSAR_VWAP');
+  // F. PSAR + VWAP — вес 1 каждый
+  if (psar.bull) { bullScore+=1; bullReasons.push('PSAR_BULL'); }
+  else { bearScore+=1; bearReasons.push('PSAR_BEAR'); }
+  if (last.close>vwap) { bullScore+=1; bullReasons.push('ABOVE_VWAP'); }
+  else { bearScore+=1; bearReasons.push('BELOW_VWAP'); }
 
-  // G. Свечной паттерн Нисон (Elder Screen 3 — триггер)
-  // ТОЛЬКО если надёжность ≥63% по Булковски
-  if (cp.direction>0&&cp.reliability>=63) bull.push('CANDLE:'+cp.name);
-  if (cp.direction<0&&cp.reliability>=63) bear.push('CANDLE:'+cp.name);
+  // G. Свечной паттерн — вес зависит от надёжности
+  if (cp.direction>0&&cp.reliability>=63) {
+    const w=cp.reliability>=72?2:1;
+    bullScore+=w; bullReasons.push('CANDLE:'+cp.name);
+  }
+  if (cp.direction<0&&cp.reliability>=63) {
+    const w=cp.reliability>=72?2:1;
+    bearScore+=w; bearReasons.push('CANDLE:'+cp.name);
+  }
 
-  // H. Структура рынка (Smart Money)
-  if (ms.trend==='UPTREND') bull.push('STRUCT');
-  if (ms.trend==='DOWNTREND') bear.push('STRUCT');
-  if (ms.choch==='BULL_CHOCH') bull.push('CHOCH');
-  if (ms.choch==='BEAR_CHOCH') bear.push('CHOCH');
+  // H. Структура рынка — вес 2
+  if (ms.trend==='UPTREND') { bullScore+=2; bullReasons.push('STRUCT_UP'); }
+  if (ms.trend==='DOWNTREND') { bearScore+=2; bearReasons.push('STRUCT_DN'); }
+  if (ms.choch==='BULL_CHOCH') { bullScore+=2; bullReasons.push('CHOCH_BULL'); }
+  if (ms.choch==='BEAR_CHOCH') { bearScore+=2; bearReasons.push('CHOCH_BEAR'); }
+  if (ms.bos==='BULL_BOS') { bullScore+=1; bullReasons.push('BOS_BULL'); }
+  if (ms.bos==='BEAR_BOS') { bearScore+=1; bearReasons.push('BOS_BEAR'); }
 
-  // I. S/R уровни (Нисон — вход В зоне важен)
-  if (last.close<=sr.sup+atr*0.5&&sr.supS>=2) bull.push('AT_SUP');
-  if (last.close>=sr.res-atr*0.5&&sr.resS>=2) bear.push('AT_RES');
+  // I. S/R уровни — вес 2 если сильный уровень
+  if (last.close<=sr.sup+atr*0.8) { const w=sr.supS>=3?2:1; bullScore+=w; bullReasons.push('AT_SUP'); }
+  if (last.close>=sr.res-atr*0.8) { const w=sr.resS>=3?2:1; bearScore+=w; bearReasons.push('AT_RES'); }
 
-  // J. RSI дивергенция (сильный разворотный сигнал)
-  if (div.bull) bull.push('RSI_DIV');
-  if (div.bear) bear.push('RSI_DIV');
+  // J. RSI дивергенция — вес 3 (сильный сигнал)
+  if (div.bull) { bullScore+=3; bullReasons.push('RSI_DIV'); }
+  if (div.bear) { bearScore+=3; bearReasons.push('RSI_DIV'); }
 
-  // K. Order Block / FVG (ICT)
-  if (ms.ob?.type==='BULL'&&last.close>=ms.ob.low&&last.close<=ms.ob.high*1.002) bull.push('OB');
-  if (ms.ob?.type==='BEAR'&&last.close<=ms.ob.high&&last.close>=ms.ob.low*0.998) bear.push('OB');
+  // K. Order Block / FVG — вес 2
+  if (ms.ob?.type==='BULL'&&last.close>=ms.ob.low&&last.close<=ms.ob.high*1.005) { bullScore+=2; bullReasons.push('OB_BULL'); }
+  if (ms.ob?.type==='BEAR'&&last.close<=ms.ob.high&&last.close>=ms.ob.low*0.995) { bearScore+=2; bearReasons.push('OB_BEAR'); }
+  if (ms.fvg?.type==='BULL'&&last.close>=ms.fvg.low&&last.close<=ms.fvg.high) { bullScore+=1; bullReasons.push('FVG_BULL'); }
+  if (ms.fvg?.type==='BEAR'&&last.close<=ms.fvg.high&&last.close>=ms.fvg.low) { bearScore+=1; bearReasons.push('FVG_BEAR'); }
 
-  // ══ ШАГ 7: СТАРШИЙ TF ФИЛЬТР (Murphy правило #1) ══
-  // Если старший TF против нас — убираем системы в его направлении
-  // Нельзя покупать если H1 медвежий (даже если M5 идеален)
-  let filteredBull=[...bull], filteredBear=[...bear];
-  if (htfBias==='BEAR') filteredBull=filteredBull.filter(s=>s==='RSI_DIV'||s==='AT_SUP'); // только разворот
-  if (htfBias==='BULL') filteredBear=filteredBear.filter(s=>s==='RSI_DIV'||s==='AT_RES');
+  // ══ ШАГ 7: HTF ФИЛЬТР — ШТРАФ, НЕ УБИЙСТВО ══
+  // Не удаляем системы, а штрафуем очки
+  let htfPenalty = 0;
+  if (htfBias==='BEAR' && bullScore>bearScore) htfPenalty = 3;  // штраф против HTF
+  if (htfBias==='BULL' && bearScore>bullScore) htfPenalty = 3;
+  const adjBullScore = bullScore - (htfBias==='BEAR'?htfPenalty:0);
+  const adjBearScore = bearScore - (htfBias==='BULL'?htfPenalty:0);
 
-  const bullCount=filteredBull.length;
-  const bearCount=filteredBear.length;
+  // ══ ШАГ 8: РЕШЕНИЕ ══
+  // Минимальный балл для сигнала: 4 (было эквивалентно 3 системам)
+  // Перевес над противником: минимум 2 балла
+  const MIN_SCORE  = 4;
+  const MIN_EDGE   = 2;
 
-  // ══ ШАГ 8: РЕШЕНИЕ — строгие условия для бинарных опционов ══
   let signal='WAIT';
   let conf=50;
   let reason='INSUFFICIENT_CONFLUENCE';
+  let rawScore=0;
 
-  // Минимальные условия:
-  // 1. Должно быть ≥3 независимых систем
-  // 2. Перевес ≥2 систем над противоположным направлением
-  // 3. В тренде: должна быть система EMA_TREND или STRUCT
-  // 4. В боковике: должна быть система BB + паттерн
+  const maxPossible = 22; // максимально возможный суммарный балл
 
-  const hasTrendConf  = filteredBull.includes('EMA_TREND')||filteredBull.includes('STRUCT');
-  const hasTrendConfB = filteredBear.includes('EMA_TREND')||filteredBear.includes('STRUCT');
-  const hasPattern    = filteredBull.some(s=>s.startsWith('CANDLE'));
-  const hasPatternB   = filteredBear.some(s=>s.startsWith('CANDLE'));
-  const hasBBRange    = filteredBull.includes('BB_LOW')||filteredBear.includes('BB_HIGH');
-  const hasReversal   = filteredBull.includes('CHOCH')||filteredBull.includes('RSI_DIV');
-  const hasReversalB  = filteredBear.includes('CHOCH')||filteredBear.includes('RSI_DIV');
-
-  // В боковике — только от BB границ с паттерном
-  if (isRange) {
-    if (bullCount>=3&&hasBBRange&&hasPattern&&bullCount>bearCount+1) {
-      signal='BUY'; conf=55+bullCount*3; reason=filteredBull.join('+');
-    } else if (bearCount>=3&&hasBBRange&&hasPatternB&&bearCount>bullCount+1) {
-      signal='SELL'; conf=55+bearCount*3; reason=filteredBear.join('+');
-    }
-  }
-  // В тренде — только в направлении тренда с подтверждением
-  else if (isTrending) {
-    if (bullCount>=3&&hasTrendConf&&bullCount>bearCount) {
-      signal='BUY'; conf=60+bullCount*2+(hasPattern?5:0); reason=filteredBull.join('+');
-    } else if (bearCount>=3&&hasTrendConfB&&bearCount>bullCount) {
-      signal='SELL'; conf=60+bearCount*2+(hasPatternB?5:0); reason=filteredBear.join('+');
-    }
-  }
-  // Нейтральный режим — только при сильном развороте
-  else {
-    if (bullCount>=4&&hasReversal&&bullCount>bearCount+2) {
-      signal='BUY'; conf=62+bullCount*2; reason=filteredBull.join('+');
-    } else if (bearCount>=4&&hasReversalB&&bearCount>bullCount+2) {
-      signal='SELL'; conf=62+bearCount*2; reason=filteredBear.join('+');
-    }
+  if (adjBullScore>=MIN_SCORE && adjBullScore-adjBearScore>=MIN_EDGE) {
+    signal='BUY';
+    rawScore=adjBullScore;
+    // Уверенность: базовые 55% + до 37% от скора
+    conf = Math.round(55 + (adjBullScore/maxPossible)*37 + (cp.direction>0?3:0));
+    reason=bullReasons.slice(0,7).join('+');
+  } else if (adjBearScore>=MIN_SCORE && adjBearScore-adjBullScore>=MIN_EDGE) {
+    signal='SELL';
+    rawScore=adjBearScore;
+    conf = Math.round(55 + (adjBearScore/maxPossible)*37 + (cp.direction<0?3:0));
+    reason=bearReasons.slice(0,7).join('+');
   }
 
-  // Ограничиваем confidence
+  // HTF совпадение — бонус уверенности
+  if (signal==='BUY'  && htfBias==='BULL') conf += 5;
+  if (signal==='SELL' && htfBias==='BEAR') conf += 5;
+
   conf = Math.max(10, Math.min(92, conf));
-  // Для SELL показываем conf от медвежьей стороны
-  const displayConf = signal==='SELL' ? conf : conf;
 
   return {
     signal,
-    conf: Math.round(displayConf),
+    conf: Math.round(conf),
     reason,
+    rawScore,
     // Метаданные
     htfBias,
     volRegime: vol.regime,
     atrPct: vol.atrPct,
     regime: isRange?'RANGE':isTrending?'TREND':'NEUTRAL',
-    bullSystems: bullCount,
-    bearSystems: bearCount,
-    // Индикаторы для отображения
+    bullSystems: bullReasons.length,
+    bearSystems: bearReasons.length,
+    // Индикаторы
     rsi: rsi.toFixed(1),
     adx: adx.adx.toFixed(1),
     stochK: stoch.k.toFixed(1),
@@ -540,7 +558,7 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
     elder: signal,
     bull: signal==='BUY'?conf:100-conf,
     bear: signal==='SELL'?conf:100-conf,
-    reasons: reason.split('+').slice(0,6),
+    reasons: reason.split('+').slice(0,7),
     manipulation: null,
     mtf: htfBias,
     mtfStrength: htfBias!=='NEUTRAL'?70:50,
@@ -555,7 +573,7 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
     delta: '0',
     mom: '0',
     stable: 0,
-    edge: Math.abs(bullCount-bearCount),
+    edge: Math.abs(adjBullScore-adjBearScore),
   };
 }
 
@@ -563,7 +581,9 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
 function emptyIndicators(c, atr, sr) {
   const rsi=IND.RSI(c), adx=IND.ADX(c), stoch=IND.STOCH(c), bb=IND.BB(c);
   const macd=IND.MACD(c), psar=IND.PSAR(c), vwap=IND.VWAP(c);
-  const cp=candlePattern(c), ms=marketStructure(c,atr), last=c[c.length-1];
+  const cp=candlePattern(c);
+  const ms=c.length>=15?marketStructure(c,atr):{trend:'RANGE',bos:null,choch:null,ob:null,fvg:null};
+  const last=c[c.length-1]||{close:0};
   return {
     rsi:rsi.toFixed(1), adx:adx.adx.toFixed(1), stochK:stoch.k.toFixed(1),
     bb:bb.pctB.toFixed(1), macdCross:macd.cross||'-', psar:psar.bull?'BULL':'BEAR',
@@ -573,19 +593,18 @@ function emptyIndicators(c, atr, sr) {
     inDemand:false, inSupply:false, elder:'WAIT',
     bull:50, bear:50, reasons:[], manipulation:null,
     mtf:'NEUTRAL', mtfStrength:50, momentum:'NEUTRAL', momScore:0,
-    paZone:'N/A', paPosition:50,
+    paZone:'N/A', paPosition:50, rawScore:0,
     sup:sr.sup>0?sr.sup.toFixed(5):'0', res:sr.res>0?sr.res.toFixed(5):'0',
     newsRisk:false, event:'', delta:'0', mom:'0', stable:0, edge:0,
   };
 }
 
-// Получаем bias от старшего TF
+// HTF bias из кэша старших TF
 function getHTFBias(marketData, sym, tf) {
   if (!marketData) return 'NEUTRAL';
   const order=['M1','M5','M15','M30','H1'];
   const idx=order.indexOf(tf);
   if (idx<0) return 'NEUTRAL';
-  // Смотрим на 2 старших TF
   for (let i=idx+2; i>=idx+1; i--) {
     if (i>=order.length) continue;
     const htf=order[i];
@@ -599,11 +618,11 @@ function getHTFBias(marketData, sym, tf) {
   return 'NEUTRAL';
 }
 
-// Дополнительные утилиты
+// Вспомогательные функции
 function momentumScore(c) {
   if (c.length<10) return { score:0, direction:'NEUTRAL', acceleration:0 };
-  const roc5=(c[c.length-1].close-c[c.length-6].close)/c[c.length-6].close*100;
-  const roc3=(c[c.length-1].close-c[c.length-4].close)/c[c.length-4].close*100;
+  const roc5=(c[c.length-1].close-c[c.length-6].close)/Math.max(c[c.length-6].close,0.00001)*100;
+  const roc3=(c[c.length-1].close-c[c.length-4].close)/Math.max(c[c.length-4].close,0.00001)*100;
   return { score:roc5, direction:roc5>0?'BULL':'BEAR', acceleration:roc3-roc5, roc3, roc5 };
 }
 
