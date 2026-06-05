@@ -592,15 +592,13 @@ function render(d) {
   const otcSyms  = allSyms.filter(s => s.includes('OTC')).sort();
   const fxSyms   = allSyms.filter(s => !s.includes('OTC')).sort();
   let h = '';
-  const tops = [...d].filter(x => {
-    if (x.signal === 'WAIT') return false;
-    if (activeTF !== 'ALL' && x.tf !== activeTF) return false;
-    if (activeDir !== 'ALL' && x.signal !== activeDir) return false;
-    if (activeConf > 0 && Number(x.conf) < Number(activeConf)) return false;
-    if (activeType === 'OTC' && !x.sym.includes('OTC')) return false;
-    if (activeType === 'FX'  &&  x.sym.includes('OTC')) return false;
-    return true;
-  }).sort((a, b) => b.conf - a.conf).slice(0, 6);
+
+  // Сначала берем все сигналы, фильтруем их по выбранным кнопкам, затем выбираем ТОП-6 по уверенности
+  const tops = filtered
+    .filter(x => x.signal !== 'WAIT')
+    .sort((a, b) => b.conf - a.conf)
+    .slice(0, 6);
+
   if (tops.length) {
     h += '<div class="section-title">TOP SIGNALS</div><div class="top-signals">';
     tops.forEach(x => {
