@@ -224,11 +224,11 @@ function analyze(sym, tf) {
 
 // ✅ FIX: нормализация символа на входе — пробел → _, убираем мусор
 function normalizeSymbol(raw) {
-  return (raw || '')
-    .toUpperCase()
-    .replace(/\s+/g, '_')
-    .replace(/#/g, '')
-    .replace(/-/g, '');
+  if (!raw) return '';
+  let s = raw.toUpperCase().replace(/[^A-Z0-9]/g, ''); // Убираем слэши, точки, скобки
+  // Если в оригинале был OTC, но после очистки пропал - возвращаем
+  if (raw.toUpperCase().includes('OTC') && !s.endsWith('OTC')) s += 'OTC';
+  return s;
 }
 
 app.post('/data', (req, res) => {
@@ -237,7 +237,7 @@ app.post('/data', (req, res) => {
     const d = JSON.parse(raw);
     // ✅ FIX: нормализуем символ — "AUDNZD OTC" и "AUDNZD_OTC" станут одним ключом
     const sym = normalizeSymbol(d.symbol);
-    const bid = parseFloat(d.bid || d.close || 0);
+    const bid = parseFloat(d.bid || d.close || d.price || d.rate || 0);
     const vol = parseFloat(d.volume || 1);
     if (!sym || bid <= 0) return res.status(400).send('Invalid');
     if (!marketData[sym]) {
