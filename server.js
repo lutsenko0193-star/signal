@@ -593,8 +593,9 @@ function render(d) {
   const fxSyms   = allSyms.filter(s => !s.includes('OTC')).sort();
   let h = '';
 
-  // Сначала берем все сигналы, фильтруем их по выбранным кнопкам, затем выбираем ТОП-6 по уверенности
-  const tops = filtered
+  // FIX: Tops теперь ВСЕГДА используют массив filtered, 
+  // который уже учитывает нажатые кнопки TF, DIR, CONF и TYPE.
+  const tops = [...filtered]
     .filter(x => x.signal !== 'WAIT')
     .sort((a, b) => b.conf - a.conf)
     .slice(0, 6);
