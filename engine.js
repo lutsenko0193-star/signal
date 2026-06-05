@@ -385,7 +385,7 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
     signal: 'WAIT', conf: 0, reason: 'HIGH_IMPACT_NEWS: ' + (news.event || 'UNKNOWN'), rawScore: 0,
     ...emptyIndicators(c, atr, sr)
   };
-  
+
   // MEDIUM IMPACT = штраф 20% к confidence (не полный стоп)
   let newsMultiplier = 1.0;
   if (news?.impact === 'MEDIUM') newsMultiplier = 0.8;
@@ -482,8 +482,8 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   if (last.close >= sr.res - atr * 0.8) { const w = sr.resS >= 3 ? 2 : 1; bearScore += w; bearReasons.push('AT_RES'); }
 
   // J. RSI дивергенция
-  if (div.bull) { bullScore += 3; bullReasons.push('RSI_DIV'); }
-  if (div.bear) { bearScore += 3; bearReasons.push('RSI_DIV'); }
+  if (div.bull) { bullScore += 4; bullReasons.push('RSI_DIV'); }
+  if (div.bear) { bearScore += 4; bearReasons.push('RSI_DIV'); }
 
   // K. Smart Money & VSA (NEW)
   if (vsa.signal === 'BULL') { bullScore += 2; bullReasons.push('VSA_BULL'); }
@@ -500,14 +500,14 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
 
   // ══ ШАГ 7: HTF ФИЛЬТР — ШТРАФ, НЕ УБИЙСТВО ══
   let htfPenalty = 0;
-  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 4;
-  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 4;
+  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 6;
+  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 6;
   const adjBullScore = bullScore - (htfBias === 'BEAR' ? htfPenalty : 0);
   const adjBearScore = bearScore - (htfBias === 'BULL' ? htfPenalty : 0);
 
   // ══ ШАГ 8: РЕШЕНИЕ ══
-  const MIN_SCORE = 8; // Очень строгий порог — только лучшие сигналы
-  const MIN_EDGE = 5;  // Нужна хорошая уверенность
+  const MIN_SCORE = 10; // Порог повышен для фильтрации шума
+  const MIN_EDGE = 7;   // Требуется более явное преимущество одной из сторон
 
   let signal = 'WAIT';
   let conf = 50;
