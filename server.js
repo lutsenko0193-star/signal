@@ -595,6 +595,8 @@ function render(d) {
   const tops = [...d].filter(x => {
     if (x.signal === 'WAIT') return false;
     if (activeTF !== 'ALL' && x.tf !== activeTF) return false;
+    if (activeDir !== 'ALL' && x.signal !== activeDir) return false;
+    if (activeConf > 0 && Number(x.conf) < Number(activeConf)) return false;
     if (activeType === 'OTC' && !x.sym.includes('OTC')) return false;
     if (activeType === 'FX'  &&  x.sym.includes('OTC')) return false;
     return true;
