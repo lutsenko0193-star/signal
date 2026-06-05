@@ -188,7 +188,7 @@ function candlePattern(c) {
   const [c2, c1, c0] = c.slice(-3);
   const atr = IND.ATR(c.slice(-15), 10);
   if (atr <= 0) return { name: 'NEUTRAL', direction: 0, reliability: 0 };
-  const body = (x) => Math.abs(x.close - x.open);
+  const body = (x) => Math.abs(x.close - x.open) || atr * 0.05;
   const uw = (x) => x.high - Math.max(x.close, x.open);
   const lw = (x) => Math.min(x.close, x.open) - x.low;
   const rng = (x) => x.high - x.low || atr * 0.1;
@@ -369,34 +369,43 @@ function rsiDivergence(c, p = 14) {
   };
 }
 
-// ─── ГЛАВНЫЙ СКОРИНГ — ПЕРЕРАБОТАН ───────────────────────────────────
+// ─── ГЛАВНЫЙ СКОРИНГ ─────────────────────────────────────────────────
 function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   const last = c[c.length - 1];
   const n = c.length;
   if (n < 10) return { signal: 'WAIT', conf: 0, reason: 'NOT_ENOUGH_DATA', rawScore: 0, ...emptyIndicators(c, atr, sr) };
 
-  // ══ ШАГ 1: ФИЛЬТР ВОЛАТИЛЬНОСТИ ══
   const vol = volatilityFilter(c, atr);
   if (!vol.ok) return {
     signal: 'WAIT', conf: 0, reason: 'LOW_VOL_' + vol.regime, rawScore: 0,
     ...emptyIndicators(c, atr, sr)
   };
 
-  // ══ ШАГ 2: НОВОСТНОЙ ФИЛЬТР ══
   if (news?.impact === 'HIGH') return {
     signal: 'WAIT', conf: 0, reason: 'HIGH_IMPACT_NEWS', rawScore: 0,
     ...emptyIndicators(c, atr, sr)
   };
 
-  // ══ ШАГ 3: HTF BIAS (Murphy) ══
   const htfBias = getHTFBias(marketData, sym, tf);
+
+  // NEW: Добавляем VSA и Смарт-структуры в основной скоринг
+  const vsa = vsaAnalysis(c);
+  const manip = manipulationDetector(c, atr);
+  const liq = liquidityZones(c, atr);
+  const wyck = wyckoff(c, sr, atr);
+
+  // ══ ШАГ 5: РЕЖИМ РЫНКА (Определяет веса) ══
+  const adx = IND.ADX(c);
+  const isTrending = adx.strength === 'TRENDING' || adx.strength === 'STRONG' || adx.strength === 'VERY_STRONG';
+  const isRange = adx.strength === 'NONE' || adx.strength === 'WEAK';
+
+  const weightMultiplier = isTrending ? { trend: 1.5, osc: 0.7 } : { trend: 0.7, osc: 1.5 };
 
   // ══ ШАГ 4: ИНДИКАТОРЫ ══
   const rsi = IND.RSI(c);
   const macd = IND.MACD(c);
   const stoch = IND.STOCH(c);
   const bb = IND.BB(c);
-  const adx = IND.ADX(c);
   const vwap = IND.VWAP(c);
   const psar = IND.PSAR(c);
   const ema8 = IND.EMA(c, 8);
@@ -405,52 +414,50 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   const cp = candlePattern(c);
   const div = rsiDivergence(c);
 
-  // ══ ШАГ 5: РЕЖИМ РЫНКА ══
-  const isTrending = adx.strength === 'TRENDING' || adx.strength === 'STRONG' || adx.strength === 'VERY_STRONG';
-  const isRange = adx.strength === 'NONE' || adx.strength === 'WEAK';
-
   // ══ ШАГ 6: CONFLUENCE — ВЗВЕШЕННАЯ СИСТЕМА ══
-  // Каждая система даёт очки, а не просто 0/1
   let bullScore = 0, bearScore = 0;
   const bullReasons = [], bearReasons = [];
 
-  // A. EMA тренд — вес 2
-  if (ema8 > ema21 && ema21 > ema50) { bullScore += 2; bullReasons.push('EMA_TREND'); }
-  else if (ema8 < ema21 && ema21 < ema50) { bearScore += 2; bearReasons.push('EMA_TREND'); }
+  // A. EMA тренд — вес высокий в тренде
+  const emaWeight = 2 * weightMultiplier.trend;
+  if (ema8 > ema21 && ema21 > ema50) { bullScore += emaWeight; bullReasons.push('EMA_TREND'); }
+  else if (ema8 < ema21 && ema21 < ema50) { bearScore += emaWeight; bearReasons.push('EMA_TREND'); }
   else if (ema8 > ema21 && last.close > ema8) { bullScore += 1; bullReasons.push('EMA_SHORT'); }
   else if (ema8 < ema21 && last.close < ema8) { bearScore += 1; bearReasons.push('EMA_SHORT'); }
 
-  // B. MACD — вес 2 (кросс), 1 (направление)
-  if (macd.cross === 'BULL') { bullScore += 2; bullReasons.push('MACD_X'); }
+  // B. MACD
+  const macdWeight = 2 * weightMultiplier.trend;
+  if (macd.cross === 'BULL') { bullScore += macdWeight; bullReasons.push('MACD_X'); }
   else if (macd.hist > 0 && macd.trend === 'BULL_STRONG') { bullScore += 1; bullReasons.push('MACD_BULL'); }
-  if (macd.cross === 'BEAR') { bearScore += 2; bearReasons.push('MACD_X'); }
+  if (macd.cross === 'BEAR') { bearScore += macdWeight; bearReasons.push('MACD_X'); }
   else if (macd.hist < 0 && macd.trend === 'BEAR_STRONG') { bearScore += 1; bearReasons.push('MACD_BEAR'); }
 
-  // C. RSI — расширены пороги до 35/65
-  if (rsi < 35) { bullScore += 2; bullReasons.push('RSI_OS'); }
+  // C. RSI — вес выше в боковике
+  const oscWeight = 2 * weightMultiplier.osc;
+  if (rsi < 35) { bullScore += oscWeight; bullReasons.push('RSI_OS'); }
   else if (rsi < 45) { bullScore += 1; bullReasons.push('RSI_LOW'); }
-  if (rsi > 65) { bearScore += 2; bearReasons.push('RSI_OB'); }
+  if (rsi > 65) { bearScore += oscWeight; bearReasons.push('RSI_OB'); }
   else if (rsi > 55) { bearScore += 1; bearReasons.push('RSI_HIGH'); }
 
-  // D. Stochastic — расширены зоны до 25/75
+  // D. Stochastic
   if (stoch.zone === 'OVERSOLD') { bullScore += 2; bullReasons.push('STOCH_OS'); }
   else if (stoch.k < 40 && stoch.cross === 'BULL') { bullScore += 1; bullReasons.push('STOCH_X_BULL'); }
   if (stoch.zone === 'OVERBOUGHT') { bearScore += 2; bearReasons.push('STOCH_OB'); }
   else if (stoch.k > 60 && stoch.cross === 'BEAR') { bearScore += 1; bearReasons.push('STOCH_X_BEAR'); }
 
-  // E. BB — позиция
-  if (bb.pctB < 25) { bullScore += 2; bullReasons.push('BB_LOW'); }
+  // E. BB
+  if (bb.pctB < 25) { bullScore += (1.5 * weightMultiplier.osc); bullReasons.push('BB_LOW'); }
   else if (bb.pctB < 40) { bullScore += 1; bullReasons.push('BB_LOW2'); }
-  if (bb.pctB > 75) { bearScore += 2; bearReasons.push('BB_HIGH'); }
+  if (bb.pctB > 75) { bearScore += (1.5 * weightMultiplier.osc); bearReasons.push('BB_HIGH'); }
   else if (bb.pctB > 60) { bearScore += 1; bearReasons.push('BB_HIGH2'); }
 
-  // F. PSAR + VWAP — вес 1 каждый
+  // F. PSAR + VWAP
   if (psar.bull) { bullScore += 1; bullReasons.push('PSAR_BULL'); }
   else { bearScore += 1; bearReasons.push('PSAR_BEAR'); }
   if (last.close > vwap) { bullScore += 1; bullReasons.push('ABOVE_VWAP'); }
   else { bearScore += 1; bearReasons.push('BELOW_VWAP'); }
 
-  // G. Свечной паттерн — вес зависит от надёжности
+  // G. Свечной паттерн
   if (cp.direction > 0 && cp.reliability >= 63) {
     const w = cp.reliability >= 72 ? 2 : 1;
     bullScore += w; bullReasons.push('CANDLE:' + cp.name);
@@ -460,54 +467,55 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
     bearScore += w; bearReasons.push('CANDLE:' + cp.name);
   }
 
-  // H. Структура рынка — вес 2
+  // H. Структура рынка
   if (ms.trend === 'UPTREND') { bullScore += 2; bullReasons.push('STRUCT_UP'); }
   if (ms.trend === 'DOWNTREND') { bearScore += 2; bearReasons.push('STRUCT_DN'); }
   if (ms.choch === 'BULL_CHOCH') { bullScore += 2; bullReasons.push('CHOCH_BULL'); }
   if (ms.choch === 'BEAR_CHOCH') { bearScore += 2; bearReasons.push('CHOCH_BEAR'); }
-  if (ms.bos === 'BULL_BOS') { bullScore += 1; bullReasons.push('BOS_BULL'); }
-  if (ms.bos === 'BEAR_BOS') { bearScore += 1; bearReasons.push('BOS_BEAR'); }
 
-  // I. S/R уровни — вес 2 если сильный уровень
+  // I. S/R уровни
   if (last.close <= sr.sup + atr * 0.8) { const w = sr.supS >= 3 ? 2 : 1; bullScore += w; bullReasons.push('AT_SUP'); }
   if (last.close >= sr.res - atr * 0.8) { const w = sr.resS >= 3 ? 2 : 1; bearScore += w; bearReasons.push('AT_RES'); }
 
-  // J. RSI дивергенция — вес 3 (сильный сигнал)
+  // J. RSI дивергенция
   if (div.bull) { bullScore += 3; bullReasons.push('RSI_DIV'); }
   if (div.bear) { bearScore += 3; bearReasons.push('RSI_DIV'); }
 
-  // K. Order Block / FVG — вес 2
-  if (ms.ob?.type === 'BULL' && last.close >= ms.ob.low && last.close <= ms.ob.high * 1.005) { bullScore += 2; bullReasons.push('OB_BULL'); }
-  if (ms.ob?.type === 'BEAR' && last.close <= ms.ob.high && last.close >= ms.ob.low * 0.995) { bearScore += 2; bearReasons.push('OB_BEAR'); }
-  if (ms.fvg?.type === 'BULL' && last.close >= ms.fvg.low && last.close <= ms.fvg.high) { bullScore += 1; bullReasons.push('FVG_BULL'); }
-  if (ms.fvg?.type === 'BEAR' && last.close <= ms.fvg.high && last.close >= ms.fvg.low) { bearScore += 1; bearReasons.push('FVG_BEAR'); }
+  // K. Smart Money & VSA (NEW)
+  if (vsa.signal === 'BULL') { bullScore += 2; bullReasons.push('VSA_BULL'); }
+  if (vsa.signal === 'BEAR') { bearScore += 2; bearReasons.push('VSA_BEAR'); }
+  if (liq.swept) {
+    if (liq.sweepDir === 'BEAR') { bullScore += 3; bullReasons.push('LIQ_SWEEP_BULL'); }
+    if (liq.sweepDir === 'BULL') { bearScore += 3; bearReasons.push('LIQ_SWEEP_BEAR'); }
+  }
+  if (wyck.spring) { bullScore += 3; bullReasons.push('WYCKOFF_SPRING'); }
+  if (wyck.upthrust) { bearScore += 3; bearReasons.push('WYCKOFF_UTAD'); }
+
+  if (ms.ob?.type === 'BULL' && last.close >= ms.ob.low && last.close <= ms.ob.high * 1.002) { bullScore += 2.5; bullReasons.push('OB_BULL'); }
+  if (ms.ob?.type === 'BEAR' && last.close <= ms.ob.high && last.close >= ms.ob.low * 0.998) { bearScore += 2.5; bearReasons.push('OB_BEAR'); }
 
   // ══ ШАГ 7: HTF ФИЛЬТР — ШТРАФ, НЕ УБИЙСТВО ══
-  // Не удаляем системы, а штрафуем очки
   let htfPenalty = 0;
-  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 3;  // штраф против HTF
-  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 3;
+  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 4;
+  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 4;
   const adjBullScore = bullScore - (htfBias === 'BEAR' ? htfPenalty : 0);
   const adjBearScore = bearScore - (htfBias === 'BULL' ? htfPenalty : 0);
 
   // ══ ШАГ 8: РЕШЕНИЕ ══
-  // Минимальный балл для сигнала: 6 (качество > количество)
-  // Перевес над противником: минимум 3 балла (улучшено качество)
-  const MIN_SCORE = 6;
-  const MIN_EDGE = 3;
+  const MIN_SCORE = 7; // Повышен порог качества
+  const MIN_EDGE = 4;  // Нужно больше уверенности
 
   let signal = 'WAIT';
   let conf = 50;
   let reason = 'INSUFFICIENT_CONFLUENCE';
   let rawScore = 0;
 
-  const maxPossible = 22; // максимально возможный суммарный балл
+  const maxPossible = 25;
 
   if (adjBullScore >= MIN_SCORE && adjBullScore - adjBearScore >= MIN_EDGE) {
     signal = 'BUY';
     rawScore = adjBullScore;
-    // ✅ FIX: Stricter confidence - 58% base + up to 32% from score (was too generous: 55% + 37%)
-    conf = Math.round(58 + (adjBullScore / maxPossible) * 32 + (cp.direction > 0 ? 2 : 0));
+    conf = Math.round(60 + (adjBullScore / maxPossible) * 30 + (cp.direction > 0 ? 2 : 0));
     reason = bullReasons.slice(0, 7).join('+');
   } else if (adjBearScore >= MIN_SCORE && adjBearScore - adjBullScore >= MIN_EDGE) {
     signal = 'SELL';
@@ -526,7 +534,7 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
     signal,
     conf: Math.round(conf),
     reason,
-    rawScore,
+    rawScore: Math.max(adjBullScore, adjBearScore),
     // Метаданные
     htfBias,
     volRegime: vol.regime,
@@ -548,12 +556,12 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
     wr: '0',
     cci: '0',
     struct: ms.trend + (ms.bos ? '+' + ms.bos : '') + (ms.choch ? '+' + ms.choch : ''),
-    wyckoffPhase: 'N/A',
-    vsaType: '-',
-    spring: false,
-    upthrust: false,
-    liqSweep: null,
-    inDemand: false,
+    wyckoffPhase: wyck.phase,
+    vsaType: vsa.signal !== 'NEUTRAL' ? vsa.signal : '-',
+    spring: wyck.spring,
+    upthrust: wyck.upthrust,
+    liqSweep: liq.swept ? liq.sweepDir : null,
+    inDemand: false, // Можно добавить расчет Supply/Demand зон
     inSupply: false,
     elder: signal,
     bull: signal === 'BUY' ? conf : 100 - conf,
@@ -605,7 +613,7 @@ function getHTFBias(marketData, sym, tf) {
   const order = ['M1', 'M5', 'M15', 'M30', 'H1'];
   const idx = order.indexOf(tf);
   if (idx < 0) return 'NEUTRAL';
-  for (let i = idx + 2; i >= idx + 1; i--) {
+  for (let i = order.length - 1; i > idx; i--) { // Смотрим самый старший из доступных
     if (i >= order.length) continue;
     const htf = order[i];
     const cached = marketData[sym]?.[htf]?.cached;
@@ -659,7 +667,22 @@ function mtfConfluence(marketData, sym, tf) {
 }
 
 function liquidityZones(c, atr) {
-  return { bullLiq: null, bearLiq: null, swept: false, sweepDir: null };
+  if (c.length < 30) return { bullLiq: null, bearLiq: null, swept: false, sweepDir: null };
+  const win = c.slice(-40);
+  const last = c[c.length - 1];
+  const swingHighs = [], swingLows = [];
+  for (let i = 2; i < win.length - 2; i++) {
+    if (win[i].high > win[i - 1].high && win[i].high > win[i + 1].high) swingHighs.push(win[i].high);
+    if (win[i].low < win[i - 1].low && win[i].low < win[i + 1].low) swingLows.push(win[i].low);
+  }
+  const bullLiq = Math.max(...swingHighs);
+  const bearLiq = Math.min(...swingLows);
+
+  let swept = false, sweepDir = null;
+  if (last.high > bullLiq && last.close < bullLiq) { swept = true; sweepDir = 'BULL'; }
+  if (last.low < bearLiq && last.close > bearLiq) { swept = true; sweepDir = 'BEAR'; }
+
+  return { bullLiq, bearLiq, swept, sweepDir };
 }
 
 function supplyDemand(c, atr) {
@@ -667,10 +690,26 @@ function supplyDemand(c, atr) {
 }
 
 function wyckoff(c, sr, atr) {
-  return { phase: 'N/A', spring: false, upthrust: false };
+  if (c.length < 30 || !sr) return { phase: 'N/A', spring: false, upthrust: false };
+  const last = c[c.length - 1];
+  const spring = last.low < sr.sup && last.close > sr.sup && (last.close - last.low) > (last.high - last.low) * 0.5;
+  const upthrust = last.high > sr.res && last.close < sr.res && (last.high - last.close) > (last.high - last.low) * 0.5;
+  return { phase: 'N/A', spring, upthrust };
 }
 
 function vsaAnalysis(c) {
+  if (c.length < 20) return { signal: 'NEUTRAL', type: null };
+  const last = c[c.length - 1];
+  const volAvg = c.slice(-20).reduce((a, b) => a + b.volume, 0) / 20;
+  const isHighVol = last.volume > volAvg * 1.5;
+  const isLowVol = last.volume < volAvg * 0.7;
+  const spread = last.high - last.low;
+  const isNarrow = spread < (IND.ATR(c, 10) * 0.8);
+
+  if (isHighVol && isNarrow) return { signal: 'NEUTRAL', type: 'EFFORT_NO_RESULT' };
+  if (isLowVol && isNarrow && last.close > last.open) return { signal: 'BEAR', type: 'NO_DEMAND' };
+  if (isLowVol && isNarrow && last.close < last.open) return { signal: 'BULL', type: 'NO_SUPPLY' };
+
   return { signal: 'NEUTRAL', type: null };
 }
 
