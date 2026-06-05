@@ -340,11 +340,10 @@ function volatilityFilter(c, atr) {
   const atrPct = (atr / lastPrice) * 100;
 
   // ИСПРАВЛЕНЫ ПОРОГИ:
-  // Было: DEAD < 0.02, LOW < 0.04 — слишком строго для форекс/OTC
-  // Стало: DEAD < 0.003 (буквально мёртвый рынок), LOW < 0.007
+  // Для обычных Форекс пар порог должен быть еще ниже
   let regime = 'NORMAL';
-  if (atrPct < 0.003) regime = 'DEAD';        // Полностью мёртвый рынок
-  else if (atrPct < 0.007) regime = 'LOW';      // Очень низкая волатильность
+  if (atrPct < 0.001) regime = 'DEAD';        // Порог снижен для обычных пар
+  else if (atrPct < 0.004) regime = 'LOW';      // Низкая, но допустимая волатильность
   else if (atrPct > 0.8) regime = 'HIGH';     // Экстремально высокая (новости)
   else if (ratio > 2.2) regime = 'EXPANDING';
   else if (ratio < 0.4) regime = 'CONTRACTING';
@@ -519,16 +518,16 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   // ══ ШАГ 7.5: ФИЛЬТР "СЕРЕДИНЫ ДИАПАЗОНА" (Anti-Middle Range) ══
   // В середине канала торгуем ТОЛЬКО если ADX > 30 (сильный тренд).
   // В противном случае — жесткий штраф.
-  const isMiddle = bb.pctB > 30 && bb.pctB < 70;
-  const strongTrend = adx.adx > 30;
-  const rangePenalty = (isMiddle && !strongTrend) ? 12 : 0;
+  const isMiddle = bb.pctB > 35 && bb.pctB < 65;
+  const strongTrend = adx.adx > 25;
+  const rangePenalty = (isMiddle && !strongTrend) ? 8 : 0;
 
-  const finalBull = adjBullScore - rangePenalty;
-  const finalBear = adjBearScore - rangePenalty;
+  const finalBull = (adjBullScore) - rangePenalty;
+  const finalBear = (adjBearScore) - rangePenalty;
 
   // ══ ШАГ 8: РЕШЕНИЕ ══
-  const MIN_SCORE = 15; // Порог поднят: игнорируем слабые сетапы
-  const MIN_EDGE = 10;  // Требуем серьезного доминирования быков/медведей
+  const MIN_SCORE = 12; // Оптимальный порог для баланса качества/количества
+  const MIN_EDGE = 8;   // Требуемый перевес
 
   let signal = 'WAIT';
   let conf = 50;
