@@ -506,8 +506,8 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   const adjBearScore = bearScore - (htfBias === 'BULL' ? htfPenalty : 0);
 
   // ══ ШАГ 8: РЕШЕНИЕ ══
-  const MIN_SCORE = 7; // Повышен порог качества
-  const MIN_EDGE = 4;  // Нужно больше уверенности
+  const MIN_SCORE = 8; // Очень строгий порог — только лучшие сигналы
+  const MIN_EDGE = 5;  // Нужна хорошая уверенность
 
   let signal = 'WAIT';
   let conf = 50;
@@ -519,18 +519,20 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   if (adjBullScore >= MIN_SCORE && adjBullScore - adjBearScore >= MIN_EDGE) {
     signal = 'BUY';
     rawScore = adjBullScore;
-    conf = Math.round(60 + (adjBullScore / maxPossible) * 30 + (cp.direction > 0 ? 2 : 0));
+    // Более консервативная формула: 65% base + 24% за score
+    conf = Math.round(65 + (adjBullScore / maxPossible) * 24 + (cp.direction > 0 ? 2 : 0));
     reason = bullReasons.slice(0, 7).join('+');
   } else if (adjBearScore >= MIN_SCORE && adjBearScore - adjBullScore >= MIN_EDGE) {
     signal = 'SELL';
     rawScore = adjBearScore;
-    conf = Math.round(58 + (adjBearScore / maxPossible) * 32 + (cp.direction < 0 ? 2 : 0));
+    // Более консервативная формула: 63% base + 26% за score
+    conf = Math.round(63 + (adjBearScore / maxPossible) * 26 + (cp.direction < 0 ? 2 : 0));
     reason = bearReasons.slice(0, 7).join('+');
   }
 
-  // HTF совпадение — бонус уверенности
-  if (signal === 'BUY' && htfBias === 'BULL') conf += 5;
-  if (signal === 'SELL' && htfBias === 'BEAR') conf += 5;
+  // HTF совпадение — бонус уверенности (+3 вместо +5)
+  if (signal === 'BUY' && htfBias === 'BULL') conf += 3;
+  if (signal === 'SELL' && htfBias === 'BEAR') conf += 3;
 
   // ✅ NEW: Штраф за MEDIUM IMPACT новости
   conf = Math.round(conf * newsMultiplier);

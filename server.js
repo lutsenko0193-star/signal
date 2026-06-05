@@ -28,6 +28,7 @@ app.use(express.text({ type: '*/*' }));
 
 const marketData = {};
 let economicNews = [];
+let newsAlerts = []; // ✅ NEW: Массив активных уведомлений о новостях
 const TFS = ['M1', 'M5', 'M15', 'M30', 'H1'];
 const MAX_HISTORY = 500;
 const TF_MS = { 'M1': 60e3, 'M5': 300e3, 'M15': 900e3, 'M30': 1800e3, 'H1': 3600e3 };
