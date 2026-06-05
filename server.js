@@ -52,10 +52,10 @@ function newsStatus(sym) {
 // ✅ NEW: Отслеживание активных новостей и уведомления
 function checkNewsAlerts() {
   const now = Date.now();
-  
+
   // Ищем новости которые только выходят (в течение 1 минуты)
   const justReleased = economicNews.filter(n => Math.abs(now - n.timestamp) <= 60000 && n.timestamp <= now);
-  
+
   justReleased.forEach(news => {
     // Проверяем не уведомляли ли уже об этой новости
     if (!newsAlerts.find(a => a.event === news.event && a.timestamp === news.timestamp)) {
@@ -67,12 +67,12 @@ function checkNewsAlerts() {
         releasedAt: now,
         alertSent: true
       });
-      
+
       // Лог выхода новости
       console.log(`[NEWS ALERT] 🔔 ${news.impact} - ${news.currency}: ${news.event}`);
     }
   });
-  
+
   // Очищаем старые уведомления (старше 1 часа)
   newsAlerts = newsAlerts.filter(a => now - a.releasedAt <= 3600000);
 }
@@ -329,7 +329,7 @@ app.get('/active_news', (req, res) => {
       minutesAgo: Math.round((now - n.releasedAt) / 60000)
     }))
     .sort((a, b) => b.releasedAt - a.releasedAt);
-  
+
   res.json({
     count: active.length,
     news: active,
@@ -341,7 +341,7 @@ app.get('/active_news', (req, res) => {
 app.get('/news_calendar', (req, res) => {
   const now = Date.now();
   const upcoming = economicNews
-    .filter(n => n.timestamp > now && n.timestamp <= now + 24*3600000)  // На следующие 24 часа
+    .filter(n => n.timestamp > now && n.timestamp <= now + 24 * 3600000)  // На следующие 24 часа
     .map(n => ({
       currency: n.currency,
       event: n.event,
@@ -350,7 +350,7 @@ app.get('/news_calendar', (req, res) => {
       minutesUntil: Math.round((n.timestamp - now) / 60000)
     }))
     .sort((a, b) => a.timestamp - b.timestamp);
-  
+
   res.json({
     count: upcoming.length,
     news: upcoming,
@@ -594,6 +594,7 @@ function render(d) {
   let h = '';
   const tops = [...d].filter(x => {
     if (x.signal === 'WAIT') return false;
+    if (activeTF !== 'ALL' && x.tf !== activeTF) return false;
     if (activeType === 'OTC' && !x.sym.includes('OTC')) return false;
     if (activeType === 'FX'  &&  x.sym.includes('OTC')) return false;
     return true;
