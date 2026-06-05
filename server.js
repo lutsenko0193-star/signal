@@ -48,6 +48,37 @@ function newsStatus(sym) {
   return { risk: true, impact: maxN.impact, event: maxN.event };
 }
 
+// ✅ NEW: Отслеживание активных новостей и уведомления
+function checkNewsAlerts() {
+  const now = Date.now();
+  
+  // Ищем новости которые только выходят (в течение 1 минуты)
+  const justReleased = economicNews.filter(n => Math.abs(now - n.timestamp) <= 60000 && n.timestamp <= now);
+  
+  justReleased.forEach(news => {
+    // Проверяем не уведомляли ли уже об этой новости
+    if (!newsAlerts.find(a => a.event === news.event && a.timestamp === news.timestamp)) {
+      newsAlerts.push({
+        event: news.event,
+        currency: news.currency,
+        impact: news.impact,
+        timestamp: news.timestamp,
+        releasedAt: now,
+        alertSent: true
+      });
+      
+      // Лог выхода новости
+      console.log(`[NEWS ALERT] 🔔 ${news.impact} - ${news.currency}: ${news.event}`);
+    }
+  });
+  
+  // Очищаем старые уведомления (старше 1 часа)
+  newsAlerts = newsAlerts.filter(a => now - a.releasedAt <= 3600000);
+}
+
+// ✅ NEW: Запуск проверки новостей каждые 10 секунд
+setInterval(() => checkNewsAlerts(), 10000);
+
 function analyze(sym, tf) {
   const data = marketData[sym][tf];
   const hist = data.history;
@@ -279,9 +310,51 @@ app.post('/news', (req, res) => {
       currency: d.currency, event: d.event, impact: d.impact || 'HIGH',
       timestamp: Date.now() + ((d.timeOffsetMinutes || 0) * 60000)
     });
-    if (economicNews.length > 50) economicNews.shift();
+    if (economicNews.length > MAX_NEWS) economicNews.shift();
     res.status(200).send('OK');
   } catch (e) { res.status(400).send('Error'); }
+});
+
+// ✅ NEW: Получить активные новости (которые вышли в последний час)
+app.get('/active_news', (req, res) => {
+  const now = Date.now();
+  const active = newsAlerts
+    .filter(n => now - n.releasedAt <= 3600000)  // За последний час
+    .map(n => ({
+      currency: n.currency,
+      event: n.event,
+      impact: n.impact,
+      releaseTime: new Date(n.releasedAt).toISOString(),
+      minutesAgo: Math.round((now - n.releasedAt) / 60000)
+    }))
+    .sort((a, b) => b.releasedAt - a.releasedAt);
+  
+  res.json({
+    count: active.length,
+    news: active,
+    timestamp: new Date(now).toISOString()
+  });
+});
+
+// ✅ NEW: Получить расписание предстоящих новостей
+app.get('/news_calendar', (req, res) => {
+  const now = Date.now();
+  const upcoming = economicNews
+    .filter(n => n.timestamp > now && n.timestamp <= now + 24*3600000)  // На следующие 24 часа
+    .map(n => ({
+      currency: n.currency,
+      event: n.event,
+      impact: n.impact,
+      releaseTime: new Date(n.timestamp).toISOString(),
+      minutesUntil: Math.round((n.timestamp - now) / 60000)
+    }))
+    .sort((a, b) => a.timestamp - b.timestamp);
+  
+  res.json({
+    count: upcoming.length,
+    news: upcoming,
+    timestamp: new Date(now).toISOString()
+  });
 });
 
 app.get('/get_signals', (req, res) => {

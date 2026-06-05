@@ -382,9 +382,13 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   };
 
   if (news?.impact === 'HIGH') return {
-    signal: 'WAIT', conf: 0, reason: 'HIGH_IMPACT_NEWS', rawScore: 0,
+    signal: 'WAIT', conf: 0, reason: 'HIGH_IMPACT_NEWS: ' + (news.event || 'UNKNOWN'), rawScore: 0,
     ...emptyIndicators(c, atr, sr)
   };
+  
+  // MEDIUM IMPACT = штраф 20% к confidence (не полный стоп)
+  let newsMultiplier = 1.0;
+  if (news?.impact === 'MEDIUM') newsMultiplier = 0.8;
 
   const htfBias = getHTFBias(marketData, sym, tf);
 
@@ -527,6 +531,9 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   // HTF совпадение — бонус уверенности
   if (signal === 'BUY' && htfBias === 'BULL') conf += 5;
   if (signal === 'SELL' && htfBias === 'BEAR') conf += 5;
+
+  // ✅ NEW: Штраф за MEDIUM IMPACT новости
+  conf = Math.round(conf * newsMultiplier);
 
   conf = Math.max(10, Math.min(92, conf));
 
