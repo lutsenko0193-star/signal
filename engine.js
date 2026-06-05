@@ -482,8 +482,8 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   if (last.close >= sr.res - atr * 0.8) { const w = sr.resS >= 3 ? 2 : 1; bearScore += w; bearReasons.push('AT_RES'); }
 
   // J. RSI дивергенция
-  if (div.bull) { bullScore += 4; bullReasons.push('RSI_DIV'); }
-  if (div.bear) { bearScore += 4; bearReasons.push('RSI_DIV'); }
+  if (div.bull) { bullScore += 5; bullReasons.push('RSI_DIV'); }
+  if (div.bear) { bearScore += 5; bearReasons.push('RSI_DIV'); }
 
   // K. Smart Money & VSA (NEW)
   if (vsa.signal === 'BULL') { bullScore += 2; bullReasons.push('VSA_BULL'); }
@@ -500,14 +500,21 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
 
   // ══ ШАГ 7: HTF ФИЛЬТР — ШТРАФ, НЕ УБИЙСТВО ══
   let htfPenalty = 0;
-  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 6;
-  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 6;
+  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 8;
+  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 8;
   const adjBullScore = bullScore - (htfBias === 'BEAR' ? htfPenalty : 0);
   const adjBearScore = bearScore - (htfBias === 'BULL' ? htfPenalty : 0);
 
+  // ══ ШАГ 7.5: ФИЛЬТР "СЕРЕДИНЫ ДИАПАЗОНА" (Anti-Middle Range) ══
+  // Если цена в середине Bollinger Bands (40-60%), режем скоринг. 
+  // Лучшие входы — только у границ (Price Action по Бруксу).
+  const isMiddle = bb.pctB > 35 && bb.pctB < 65;
+  const finalBull = isMiddle ? adjBullScore - 10 : adjBullScore;
+  const finalBear = isMiddle ? adjBearScore - 10 : adjBearScore;
+
   // ══ ШАГ 8: РЕШЕНИЕ ══
-  const MIN_SCORE = 10; // Порог повышен для фильтрации шума
-  const MIN_EDGE = 7;   // Требуется более явное преимущество одной из сторон
+  const MIN_SCORE = 15; // Порог поднят: игнорируем слабые сетапы
+  const MIN_EDGE = 10;  // Требуем серьезного доминирования быков/медведей
 
   let signal = 'WAIT';
   let conf = 50;
@@ -516,17 +523,17 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
 
   const maxPossible = 25;
 
-  if (adjBullScore >= MIN_SCORE && adjBullScore - adjBearScore >= MIN_EDGE) {
+  if (finalBull >= MIN_SCORE && finalBull - finalBear >= MIN_EDGE) {
     signal = 'BUY';
-    rawScore = adjBullScore;
+    rawScore = finalBull;
     // Более консервативная формула: 65% base + 24% за score
-    conf = Math.round(65 + (adjBullScore / maxPossible) * 24 + (cp.direction > 0 ? 2 : 0));
+    conf = Math.round(65 + (finalBull / maxPossible) * 24 + (cp.direction > 0 ? 2 : 0));
     reason = bullReasons.slice(0, 7).join('+');
-  } else if (adjBearScore >= MIN_SCORE && adjBearScore - adjBullScore >= MIN_EDGE) {
+  } else if (finalBear >= MIN_SCORE && finalBear - finalBull >= MIN_EDGE) {
     signal = 'SELL';
-    rawScore = adjBearScore;
+    rawScore = finalBear;
     // Более консервативная формула: 63% base + 26% за score
-    conf = Math.round(63 + (adjBearScore / maxPossible) * 26 + (cp.direction < 0 ? 2 : 0));
+    conf = Math.round(63 + (finalBear / maxPossible) * 26 + (cp.direction < 0 ? 2 : 0));
     reason = bearReasons.slice(0, 7).join('+');
   }
 
