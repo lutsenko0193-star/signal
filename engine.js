@@ -482,8 +482,8 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   if (last.close >= sr.res - atr * 0.8) { const w = sr.resS >= 3 ? 2 : 1; bearScore += w; bearReasons.push('AT_RES'); }
 
   // J. RSI дивергенция
-  if (div.bull) { bullScore += 5; bullReasons.push('RSI_DIV'); }
-  if (div.bear) { bearScore += 5; bearReasons.push('RSI_DIV'); }
+  if (div.bull) { bullScore += 7; bullReasons.push('RSI_DIV'); }
+  if (div.bear) { bearScore += 7; bearReasons.push('RSI_DIV'); }
 
   // K. Smart Money & VSA (NEW)
   if (vsa.signal === 'BULL') { bullScore += 2; bullReasons.push('VSA_BULL'); }
@@ -500,17 +500,31 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
 
   // ══ ШАГ 7: HTF ФИЛЬТР — ШТРАФ, НЕ УБИЙСТВО ══
   let htfPenalty = 0;
-  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 8;
-  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 8;
+  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 10;
+  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 10;
   const adjBullScore = bullScore - (htfBias === 'BEAR' ? htfPenalty : 0);
   const adjBearScore = bearScore - (htfBias === 'BULL' ? htfPenalty : 0);
 
+  // ══ ШАГ 7.2: FIBONACCI CONFLUENCE ══
+  if (sr.fib && sr.fib.length > 0) {
+    const nearFib = sr.fib.find(f => Math.abs(last.close - f.level) < atr * 0.3);
+    if (nearFib) {
+      if (nearFib.name === 'F61' || nearFib.name === 'F50') {
+        if (adjBullScore > adjBearScore) { bullScore += 4; bullReasons.push('FIB_GOLDEN'); }
+        else { bearScore += 4; bearReasons.push('FIB_GOLDEN'); }
+      }
+    }
+  }
+
   // ══ ШАГ 7.5: ФИЛЬТР "СЕРЕДИНЫ ДИАПАЗОНА" (Anti-Middle Range) ══
-  // Если цена в середине Bollinger Bands (40-60%), режем скоринг. 
-  // Лучшие входы — только у границ (Price Action по Бруксу).
-  const isMiddle = bb.pctB > 35 && bb.pctB < 65;
-  const finalBull = isMiddle ? adjBullScore - 10 : adjBullScore;
-  const finalBear = isMiddle ? adjBearScore - 10 : adjBearScore;
+  // В середине канала торгуем ТОЛЬКО если ADX > 30 (сильный тренд).
+  // В противном случае — жесткий штраф.
+  const isMiddle = bb.pctB > 30 && bb.pctB < 70;
+  const strongTrend = adx.adx > 30;
+  const rangePenalty = (isMiddle && !strongTrend) ? 12 : 0;
+
+  const finalBull = adjBullScore - rangePenalty;
+  const finalBear = adjBearScore - rangePenalty;
 
   // ══ ШАГ 8: РЕШЕНИЕ ══
   const MIN_SCORE = 15; // Порог поднят: игнорируем слабые сетапы
