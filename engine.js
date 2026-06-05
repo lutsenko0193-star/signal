@@ -110,8 +110,8 @@ const IND = {
     const kArr = [];
     for (let j = 0; j < 3; j++) { const sl = c.slice(-(p + 4 - j), c.length - j || undefined); if (sl.length >= p) kArr.push(raw(sl.slice(-p))); }
     const d = kArr.length ? kArr.reduce((a, b) => a + b, 0) / kArr.length : 50;
-    // Расширенные зоны: 25/75 вместо 20/80
-    const zone = k < 25 ? 'OVERSOLD' : k > 75 ? 'OVERBOUGHT' : 'NEUTRAL';
+    // Классические зоны по Джону Мерфи
+    const zone = k < 20 ? 'OVERSOLD' : k > 80 ? 'OVERBOUGHT' : 'NEUTRAL';
     let cross = null;
     if (ks.length >= 2 && kArr.length >= 2) {
       if (ks[0] < kArr[0] && k > d) cross = 'BULL';
@@ -481,8 +481,8 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   if (last.close >= sr.res - atr * 0.8) { const w = sr.resS >= 3 ? 2 : 1; bearScore += w; bearReasons.push('AT_RES'); }
 
   // J. RSI дивергенция
-  if (div.bull) { bullScore += 7; bullReasons.push('RSI_DIV'); }
-  if (div.bear) { bearScore += 7; bearReasons.push('RSI_DIV'); }
+  if (div.bull) { bullScore += 5; bullReasons.push('RSI_DIV'); }
+  if (div.bear) { bearScore += 5; bearReasons.push('RSI_DIV'); }
 
   // K. Smart Money & VSA (NEW)
   if (vsa.signal === 'BULL') { bullScore += 2; bullReasons.push('VSA_BULL'); }
@@ -516,18 +516,18 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   }
 
   // ══ ШАГ 7.5: ФИЛЬТР "СЕРЕДИНЫ ДИАПАЗОНА" (Anti-Middle Range) ══
-  // В середине канала торгуем ТОЛЬКО если ADX > 30 (сильный тренд).
-  // В противном случае — жесткий штраф.
-  const isMiddle = bb.pctB > 35 && bb.pctB < 65;
+  // Умеренная зона фильтрации (40-60%). По Элдеру и Боллинджеру, 
+  // торговля в самом центре канала опасна низкой волатильностью.
+  const isMiddle = bb.pctB > 40 && bb.pctB < 60;
   const strongTrend = adx.adx > 25;
-  const rangePenalty = (isMiddle && !strongTrend) ? 8 : 0;
+  const rangePenalty = (isMiddle && !strongTrend) ? 7 : 0;
 
   const finalBull = (adjBullScore) - rangePenalty;
   const finalBear = (adjBearScore) - rangePenalty;
 
   // ══ ШАГ 8: РЕШЕНИЕ ══
-  const MIN_SCORE = 12; // Оптимальный порог для баланса качества/количества
-  const MIN_EDGE = 8;   // Требуемый перевес
+  const MIN_SCORE = 12; // Сбалансированный порог
+  const MIN_EDGE = 7;   // Достаточный перевес для входа
 
   let signal = 'WAIT';
   let conf = 50;
