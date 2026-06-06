@@ -515,7 +515,6 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
   const adjBearScore = bearScore - (htfBias === 'BULL' ? htfPenalty : 0);
 
   // ══ ШАГ 7.1: ELDER IMPULSE SYSTEM ══
-  const macd = IND.MACD(c);
   const ema13 = IND.EMA_S(c, 13);
   const lastEma = ema13[ema13.length - 1], prevEma = ema13[ema13.length - 2];
   const emaUp = lastEma > prevEma, macdUp = macd.hist > (c.length > 1 ? IND.MACD(c.slice(0, -1)).hist : 0);
