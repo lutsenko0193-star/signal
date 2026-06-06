@@ -499,35 +499,40 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
 
   // ══ ШАГ 7: HTF ФИЛЬТР — ШТРАФ, НЕ УБИЙСТВО ══
   let htfPenalty = 0;
-  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 10;
-  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 10;
+  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 12;
+  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 12;
   const adjBullScore = bullScore - (htfBias === 'BEAR' ? htfPenalty : 0);
   const adjBearScore = bearScore - (htfBias === 'BULL' ? htfPenalty : 0);
 
   // ══ ШАГ 7.2: FIBONACCI CONFLUENCE ══
   if (sr.fib && sr.fib.length > 0) {
-    const nearFib = sr.fib.find(f => Math.abs(last.close - f.level) < atr * 0.3);
+    const nearFib = sr.fib.find(f => Math.abs(last.close - f.level) < atr * 0.4);
     if (nearFib) {
       if (nearFib.name === 'F61' || nearFib.name === 'F50') {
-        if (adjBullScore > adjBearScore) { bullScore += 4; bullReasons.push('FIB_GOLDEN'); }
-        else { bearScore += 4; bearReasons.push('FIB_GOLDEN'); }
+        if (adjBullScore > adjBearScore) { bullScore += 5; bullReasons.push('FIB_GOLDEN'); }
+        else { bearScore += 5; bearReasons.push('FIB_GOLDEN'); }
       }
     }
   }
 
   // ══ ШАГ 7.5: ФИЛЬТР "СЕРЕДИНЫ ДИАПАЗОНА" (Anti-Middle Range) ══
-  // Умеренная зона фильтрации (40-60%). По Элдеру и Боллинджеру, 
-  // торговля в самом центре канала опасна низкой волатильностью.
+  // Если цена в центре канала (40-60%) и нет импульса (Momentum < 2), 
+  // накладываем штраф, чтобы избежать входов в "запил".
   const isMiddle = bb.pctB > 40 && bb.pctB < 60;
-  const strongTrend = adx.adx > 25;
-  const rangePenalty = (isMiddle && !strongTrend) ? 7 : 0;
+  const mom = momentumScore(c);
+  const hasMomentum = Math.abs(mom.score) > 2;
+  const rangePenalty = (isMiddle && !hasMomentum) ? 10 : 0;
 
-  const finalBull = (adjBullScore) - rangePenalty;
-  const finalBear = (adjBearScore) - rangePenalty;
+  // Фильтр перекупленности/перепроданности (Anti-Falling Knife)
+  const overExtendedBull = rsi > 82;
+  const overExtendedBear = rsi < 18;
+
+  const finalBull = (adjBullScore) - rangePenalty - (overExtendedBull ? 20 : 0);
+  const finalBear = (adjBearScore) - rangePenalty - (overExtendedBear ? 20 : 0);
 
   // ══ ШАГ 8: РЕШЕНИЕ ══
-  const MIN_SCORE = 12; // Сбалансированный порог
-  const MIN_EDGE = 7;   // Достаточный перевес для входа
+  const MIN_SCORE = 13; // Порог чуть выше для фильтрации серий минусов
+  const MIN_EDGE = 8;   // Требуем более уверенного подтверждения
 
   let signal = 'WAIT';
   let conf = 50;
