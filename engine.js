@@ -509,16 +509,10 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
 
   // ══ ШАГ 7: HTF ФИЛЬТР — ШТРАФ, НЕ УБИЙСТВО ══
   let htfPenalty = 0;
-  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 15;
-  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 15;
+  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 12;
+  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 12;
   const adjBullScore = bullScore - (htfBias === 'BEAR' ? htfPenalty : 0);
   const adjBearScore = bearScore - (htfBias === 'BULL' ? htfPenalty : 0);
-
-  // ══ ШАГ 7.1: ELDER IMPULSE SYSTEM ══
-  const ema13 = IND.EMA_S(c, 13);
-  const lastEma = ema13[ema13.length - 1], prevEma = ema13[ema13.length - 2];
-  const emaUp = lastEma > prevEma, macdUp = macd.hist > (c.length > 1 ? IND.MACD(c.slice(0, -1)).hist : 0);
-  const impulseBull = emaUp && macdUp, impulseBear = !emaUp && !macdUp;
 
   // ══ ШАГ 7.2: FIBONACCI CONFLUENCE ══
   if (sr.fib && sr.fib.length > 0) {
@@ -559,13 +553,13 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
 
   if (finalBull >= MIN_SCORE && finalBull - finalBear >= MIN_EDGE) {
     signal = 'BUY';
-    rawScore = finalBull;
+    rawScore = Math.round(finalBull);
     // Более консервативная формула: 65% base + 24% за score
     conf = Math.round(65 + (finalBull / maxPossible) * 24 + (cp.direction > 0 ? 2 : 0));
     reason = bullReasons.slice(0, 7).join('+');
   } else if (finalBear >= MIN_SCORE && finalBear - finalBull >= MIN_EDGE) {
     signal = 'SELL';
-    rawScore = finalBear;
+    rawScore = Math.round(finalBear);
     // Более консервативная формула: 63% base + 26% за score
     conf = Math.round(63 + (finalBear / maxPossible) * 26 + (cp.direction < 0 ? 2 : 0));
     reason = bearReasons.slice(0, 7).join('+');
@@ -584,7 +578,7 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
     signal,
     conf: Math.round(conf),
     reason,
-    rawScore: Math.max(adjBullScore, adjBearScore),
+    rawScore: rawScore,
     // Метаданные
     htfBias,
     volRegime: vol.regime,
@@ -725,8 +719,8 @@ function liquidityZones(c, atr) {
     if (win[i].high > win[i - 1].high && win[i].high > win[i + 1].high) swingHighs.push(win[i].high);
     if (win[i].low < win[i - 1].low && win[i].low < win[i + 1].low) swingLows.push(win[i].low);
   }
-  const bullLiq = Math.max(...swingHighs);
-  const bearLiq = Math.min(...swingLows);
+  const bullLiq = swingHighs.length ? Math.max(...swingHighs) : null;
+  const bearLiq = swingLows.length ? Math.min(...swingLows) : null;
 
   let swept = false, sweepDir = null;
   if (last.high > bullLiq && last.close < bullLiq) { swept = true; sweepDir = 'BULL'; }
