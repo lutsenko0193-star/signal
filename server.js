@@ -116,7 +116,7 @@ function analyze(sym, tf) {
   const pa = priceActionZones(closed, atr);
 
   // Запускаем главный скоринг
-  const result = scoreSignal({ c: closed, sym, tf, sr, ms, atr, news });
+  const result = scoreSignal({ c: closed, sym, tf, sr, ms, atr, news, marketData });
 
   // MTF бонус/штраф
   let mtfBonus = 0;
@@ -593,8 +593,7 @@ function render(d) {
   const fxSyms   = allSyms.filter(s => !s.includes('OTC')).sort();
   let h = '';
 
-  // ГАРАНТИРОВАННАЯ ФИЛЬТРАЦИЯ ТОПОВ:
-  // Берем только то, что прошло фильтры по кнопкам (activeTF, activeType и т.д.)
+  // Синхронизируем ТОПы с текущим набором отфильтрованных данных
   const tops = filtered
     .filter(x => x.signal !== 'WAIT')
     .sort((a, b) => b.conf - a.conf)
