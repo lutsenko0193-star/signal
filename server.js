@@ -225,7 +225,7 @@ function analyze(sym, tf) {
 // ✅ FIX: нормализация символа на входе — пробел → _, убираем мусор
 function normalizeSymbol(raw) {
   if (!raw) return '';
-  let s = raw.toUpperCase().replace(/[^A-Z0-9]/g, ''); // Убираем слэши, точки, скобки
+  let s = raw.toUpperCase().replace(/[^A-Z0-9]/g, '').replace('BTCOTC', 'BTCUSD_OTC');
   // Если в оригинале был OTC, но после очистки пропал - возвращаем
   if (raw.toUpperCase().includes('OTC') && !s.endsWith('OTC')) s += 'OTC';
   return s;
@@ -593,8 +593,7 @@ function render(d) {
   const fxSyms   = allSyms.filter(s => !s.includes('OTC')).sort();
   let h = '';
 
-  // FIX: Tops теперь ВСЕГДА используют массив filtered, 
-  // который уже учитывает нажатые кнопки TF, DIR, CONF и TYPE.
+  // Синхронизация ТОПов с текущими фильтрами интерфейса
   const tops = [...filtered]
     .filter(x => x.signal !== 'WAIT')
     .sort((a, b) => b.conf - a.conf)
