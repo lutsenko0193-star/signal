@@ -593,8 +593,9 @@ function render(d) {
   const fxSyms   = allSyms.filter(s => !s.includes('OTC')).sort();
   let h = '';
 
-  // Синхронизация ТОПов с текущими фильтрами интерфейса
-  const tops = [...filtered]
+  // ГАРАНТИРОВАННАЯ ФИЛЬТРАЦИЯ ТОПОВ:
+  // Берем только то, что прошло фильтры по кнопкам (activeTF, activeType и т.д.)
+  const tops = filtered
     .filter(x => x.signal !== 'WAIT')
     .sort((a, b) => b.conf - a.conf)
     .slice(0, 6);
