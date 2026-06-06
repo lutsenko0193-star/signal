@@ -17,10 +17,11 @@ const { IND, scoreSignal, calcSR, marketStructure, momentumScore, manipulationDe
 //  CORS
 // ════════════════════════════════════════════════════
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  res.header('Access-Control-Allow-Origin', origin || '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
@@ -29,6 +30,7 @@ app.use(express.text({ type: '*/*' }));
 const marketData = {};
 let economicNews = [];
 let newsAlerts = []; // ✅ NEW: Массив активных уведомлений о новостях
+const MAX_NEWS = 100;
 const TFS = ['M1', 'M5', 'M15', 'M30', 'H1'];
 const MAX_HISTORY = 500;
 const TF_MS = { 'M1': 60e3, 'M5': 300e3, 'M15': 900e3, 'M30': 1800e3, 'H1': 3600e3 };
@@ -38,7 +40,7 @@ const TF_ORDER = { 'M1': 1, 'M5': 2, 'M15': 3, 'M30': 4, 'H1': 5 };
 function newsStatus(sym) {
   const now = Date.now();
   const active = economicNews.filter(n => {
-    const match = sym.toUpperCase().includes(n.currency.toUpperCase());
+    const match = n.currency && sym.toUpperCase().includes(n.currency.toUpperCase());
     const dist = Math.abs(now - n.timestamp);
     if (n.impact === 'HIGH' && dist <= 300000) return match;
     if (n.impact === 'MEDIUM' && dist <= 120000) return match;
@@ -233,7 +235,12 @@ function normalizeSymbol(raw) {
 
 app.post('/data', (req, res) => {
   try {
-    const raw = req.body.toString().replace(/[\x00-\x1F\x7F-\x9F]/g, '').trim();
+    if (!req.body) return res.status(400).send('Empty body');
+
+    const raw = typeof req.body === 'string'
+      ? req.body.replace(/[\x00-\x1F\x7F-\x9F]/g, '').trim()
+      : JSON.stringify(req.body);
+
     const d = JSON.parse(raw);
     // ✅ FIX: нормализуем символ — "AUDNZD OTC" и "AUDNZD_OTC" станут одним ключом
     const sym = normalizeSymbol(d.symbol);
@@ -306,7 +313,8 @@ app.post('/data', (req, res) => {
 
 app.post('/news', (req, res) => {
   try {
-    const d = JSON.parse(req.body.replace(/[\x00-\x1F\x7F-\x9F]/g, '').trim());
+    if (!req.body) return res.status(400).send('Empty body');
+    const d = typeof req.body === 'string' ? JSON.parse(req.body.replace(/[\x00-\x1F\x7F-\x9F]/g, '').trim()) : req.body;
     economicNews.push({
       currency: d.currency, event: d.event, impact: d.impact || 'HIGH',
       timestamp: Date.now() + ((d.timeOffsetMinutes || 0) * 60000)
