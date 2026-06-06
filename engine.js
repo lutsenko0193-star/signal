@@ -97,6 +97,16 @@ const IND = {
     return { macd: m, signal: si, hist, cross, trend };
   },
 
+  WPR(c, p = 14) {
+    if (c.length < p) return -50;
+    const sl = c.slice(-p);
+    const h = Math.max(...sl.map(x => x.high));
+    const l = Math.min(...sl.map(x => x.low));
+    const cl = sl[sl.length - 1].close;
+    if (h === l) return -50;
+    return ((h - cl) / (h - l)) * -100;
+  },
+
   STOCH(c, p = 14) {
     if (c.length < p + 3) return { k: 50, d: 50, zone: 'NEUTRAL', cross: null };
     const raw = (bars) => {
@@ -499,10 +509,17 @@ function scoreSignal({ c, sym, tf, sr, ms, atr, news, marketData }) {
 
   // ══ ШАГ 7: HTF ФИЛЬТР — ШТРАФ, НЕ УБИЙСТВО ══
   let htfPenalty = 0;
-  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 12;
-  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 12;
+  if (htfBias === 'BEAR' && bullScore > bearScore) htfPenalty = 15;
+  if (htfBias === 'BULL' && bearScore > bullScore) htfPenalty = 15;
   const adjBullScore = bullScore - (htfBias === 'BEAR' ? htfPenalty : 0);
   const adjBearScore = bearScore - (htfBias === 'BULL' ? htfPenalty : 0);
+
+  // ══ ШАГ 7.1: ELDER IMPULSE SYSTEM ══
+  const macd = IND.MACD(c);
+  const ema13 = IND.EMA_S(c, 13);
+  const lastEma = ema13[ema13.length - 1], prevEma = ema13[ema13.length - 2];
+  const emaUp = lastEma > prevEma, macdUp = macd.hist > (c.length > 1 ? IND.MACD(c.slice(0, -1)).hist : 0);
+  const impulseBull = emaUp && macdUp, impulseBear = !emaUp && !macdUp;
 
   // ══ ШАГ 7.2: FIBONACCI CONFLUENCE ══
   if (sr.fib && sr.fib.length > 0) {
